@@ -415,14 +415,81 @@ void drawClockPage() {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
+//  DEAD FACE — shown when no WiFi
+// ─────────────────────────────────────────────────────────────────────────────
+void drawDeadFace() {
+  gfx->fillScreen(BLACK);
+
+  // Crack lines radiating from face center
+  uint16_t cc = 0x2965;
+  int16_t fx = SCR_W/2, fy = SCR_H/2 - 10;
+  gfx->drawLine(fx,    fy,    fx-28, fy-55, cc); gfx->drawLine(fx-28, fy-55, fx-70, fy-44, cc); gfx->drawLine(fx-70, fy-44, fx-110, fy-88, cc);
+  gfx->drawLine(fx,    fy,    fx+12, fy-62, cc); gfx->drawLine(fx+12, fy-62, fx+44, fy-48, cc); gfx->drawLine(fx+44, fy-48, fx+32,  fy-110,cc);
+  gfx->drawLine(fx,    fy,    fx+66, fy-28, cc); gfx->drawLine(fx+66, fy-28, fx+84, fy-64, cc);
+  gfx->drawLine(fx,    fy,    fx+88, fy+18, cc); gfx->drawLine(fx+88, fy+18, fx+110,fy+64, cc); gfx->drawLine(fx+110,fy+64, fx+140,fy+88, cc);
+  gfx->drawLine(fx,    fy,    fx-18, fy+84, cc); gfx->drawLine(fx-18, fy+84, fx+4,  fy+130,cc);
+  gfx->drawLine(fx,    fy,    fx-82, fy+28, cc); gfx->drawLine(fx-82, fy+28, fx-120,fy+62, cc); gfx->drawLine(fx-120,fy+62, fx-138,fy+108,cc);
+  gfx->drawLine(fx,    fy,    fx-58, fy-18, cc); gfx->drawLine(fx-58, fy-18, fx-88, fy+22, cc);
+
+  // Subtle glow behind eyes
+  gfx->fillCircle(EL_X, EY_Y, 32, 0x0208);
+  gfx->fillCircle(ER_X, EY_Y, 36, 0x0208);
+
+  // Furrowed eyebrows (angry/dead)
+  int16_t bby = EY_Y - EYE_R - 14;
+  for (int t=0; t<4; t++) {
+    gfx->drawLine(EL_X-24, bby-8+t, EL_X+20, bby+6+t, DIM);  // left: outer-high, inner-low
+    gfx->drawLine(ER_X-20, bby+6+t, ER_X+24, bby-8+t, DIM);  // right: inner-low, outer-high
+  }
+
+  // ∪ left eye (closed droopy arc)
+  const int16_t uer=24, udepth=18;
+  for (int x=-uer; x<=uer; x++) {
+    int16_t dy = udepth - (int16_t)((float)x*x*udepth/(uer*uer));
+    int16_t py = EY_Y - udepth/2 + dy;
+    for (int t=0; t<5; t++) {
+      uint16_t col = (t==2) ? 0x07FF : 0x05BF;
+      gfx->drawPixel(EL_X+x, py+t, col);
+    }
+  }
+
+  // X right eye
+  int16_t xr = 24;
+  for (int t=-3; t<=3; t++) {
+    gfx->drawLine(ER_X-xr+t, EY_Y-xr, ER_X+xr+t, EY_Y+xr, 0x05BF);
+    gfx->drawLine(ER_X-xr,   EY_Y-xr+t, ER_X+xr, EY_Y+xr+t, 0x05BF);
+    gfx->drawLine(ER_X-xr+t, EY_Y+xr, ER_X+xr+t, EY_Y-xr, 0x05BF);
+    gfx->drawLine(ER_X-xr,   EY_Y+xr+t, ER_X+xr, EY_Y-xr+t, 0x05BF);
+  }
+  // Bright center pixels on X
+  gfx->drawLine(ER_X-xr, EY_Y-xr, ER_X+xr, EY_Y+xr, 0x07FF);
+  gfx->drawLine(ER_X-xr, EY_Y+xr, ER_X+xr, EY_Y-xr, 0x07FF);
+
+  // ∩ frown mouth
+  const int16_t fr=28, fdepth=14;
+  for (int x=-fr; x<=fr; x++) {
+    int16_t dy = (int16_t)((float)x*x*fdepth/(fr*fr));
+    int16_t py = MY - fdepth + dy; // center HIGH, edges LOW = ∩
+    for (int t=0; t<5; t++) {
+      uint16_t col = (t==2) ? 0x07FF : 0x05BF;
+      gfx->drawPixel(MX+x, py+t, col);
+    }
+  }
+
+  centered("No WiFi", MY+60, DIM, 1);
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
 //  WEATHER PAGE
 // ─────────────────────────────────────────────────────────────────────────────
 void drawWeatherPage() {
+  if (!wifiOk) { drawDeadFace(); return; }
+
   gfx->fillScreen(BLACK);
   drawStatusBar();
   centered("Cumming, GA",44,DIM,1);
 
-  if (!wifiOk) { centered("No WiFi",SCR_H/2,RED_COL,2); goto hints; }
+  if (!wxOk)   { centered("Loading...",SCR_H/2,DIM,2); goto hints; }
   if (!wxOk)   { centered("Loading...",SCR_H/2,DIM,2); goto hints; }
 
   {
