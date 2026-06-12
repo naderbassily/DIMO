@@ -77,7 +77,7 @@ const char *TZ_INFO   = "EST5EDT,M3.2.0/2,M11.1.0/2";
 #define SBAR   30     // status bar height
 
 // ── Pages ─────────────────────────────────────────────────────────────────────
-enum Page { PAGE_FACE, PAGE_CLOCK, PAGE_WEATHER, PAGE_MUSIC };
+enum Page { PAGE_FACE, PAGE_CLOCK, PAGE_WEATHER, PAGE_MUSIC, PAGE_SETTINGS };
 Page page = PAGE_FACE;
 
 // ── Blink state (overlay only — no redraw) ───────────────────────────────────
@@ -106,7 +106,8 @@ uint32_t tdMs     = 0;
 bool     tdSwiped = false;
 
 // ── BLE ───────────────────────────────────────────────────────────────────────
-bool              bleConn   = false;
+bool              bleConn    = false;
+bool              bleEnabled = true;
 BLEHIDDevice     *bleHID    = nullptr;
 BLECharacteristic*bleIn     = nullptr;
 bool              blePlaying = false;
@@ -507,6 +508,72 @@ void drawMusicPage() {
 
   gfx->setTextColor(DIM);gfx->setTextSize(1);
   gfx->setCursor(6,SCR_H-14);gfx->print("< face");
+  gfx->setCursor(SCR_W-90,SCR_H-14);gfx->print("settings >");
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+//  SETTINGS PAGE
+// ─────────────────────────────────────────────────────────────────────────────
+#define SET_ROW_Y1  100   // WiFi row top
+#define SET_ROW_Y2  220   // BT row top
+#define SET_ROW_H   100
+
+void drawToggle(int16_t x, int16_t y, bool on) {
+  uint16_t bg = on ? 0x0400 : GRAY; // green : gray
+  gfx->fillRoundRect(x, y, 58, 28, 14, bg);
+  int16_t kx = on ? x+34 : x+6;
+  gfx->fillCircle(kx+7, y+14, 11, WHITE);
+}
+
+void drawSettingsRow(int16_t ry, const char* label, const char* sub, bool on, uint16_t iconCol) {
+  gfx->fillRoundRect(12, ry, SCR_W-24, SET_ROW_H-8, 10, 0x18C6); // dark card
+  gfx->fillCircle(44, ry+36, 20, iconCol);                         // icon circle
+  gfx->setTextColor(WHITE); gfx->setTextSize(2);
+  gfx->setCursor(74, ry+20); gfx->print(label);
+  gfx->setTextColor(DIM);    gfx->setTextSize(1);
+  gfx->setCursor(74, ry+52); gfx->print(sub);
+  drawToggle(SCR_W-80, ry+34, on);
+}
+
+void drawSettingsPage() {
+  gfx->fillScreen(BLACK);
+  drawStatusBar();
+
+  // Title
+  gfx->setTextColor(WHITE); gfx->setTextSize(2);
+  centered("SETTINGS", 50, WHITE, 2);
+  gfx->drawFastHLine(20, 76, SCR_W-40, DIM);
+
+  // WiFi row
+  String wfSub = wifiOk ? String("Connected: ") + WIFI_SSID : (WiFi.status()==WL_NO_SSID_AVAIL ? "Connecting..." : "Disconnected");
+  drawSettingsRow(SET_ROW_Y1, "WiFi", wfSub.c_str(), wifiOk, 0x02DF);
+
+  // Bluetooth row
+  const char* btSub = bleConn ? "Device connected" : (bleEnabled ? "Visible as DIMO" : "Off");
+  drawSettingsRow(SET_ROW_Y2, "Bluetooth", btSub, bleEnabled, 0x001F);
+
+  // Nav hints
+  gfx->setTextColor(DIM); gfx->setTextSize(1);
+  gfx->setCursor(6, SCR_H-14);        gfx->print("< music");
+  gfx->setCursor(SCR_W-72, SCR_H-14); gfx->print("face >");
+}
+
+void handleSettingsTap(int16_t y) {
+  if (y >= SET_ROW_Y1 && y < SET_ROW_Y1+SET_ROW_H) {
+    // WiFi toggle
+    if (wifiOk) {
+      WiFi.disconnect(); wifiOk=false; wxOk=false; wxFetched=false;
+    } else {
+      WiFi.begin(WIFI_SSID, WIFI_PASS);
+    }
+    drawSettingsPage();
+  } else if (y >= SET_ROW_Y2 && y < SET_ROW_Y2+SET_ROW_H) {
+    // BLE toggle
+    bleEnabled = !bleEnabled;
+    if (bleEnabled) BLEDevice::startAdvertising();
+    else            BLEDevice::stopAdvertising();
+    drawSettingsPage();
+  }
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -515,10 +582,11 @@ void drawMusicPage() {
 void showPage(Page p) {
   page = p;
   switch(p){
-    case PAGE_FACE:    drawFacePage(); drawStatusBar(); blinkState=BLINK_OPEN; blinkTimer=millis(); nextBlink=5000; break;
-    case PAGE_CLOCK:   drawClockPage(); break;
-    case PAGE_WEATHER: drawWeatherPage(); break;
-    case PAGE_MUSIC:   drawMusicPage(); break;
+    case PAGE_FACE:     drawFacePage(); drawStatusBar(); blinkState=BLINK_OPEN; blinkTimer=millis(); nextBlink=5000; break;
+    case PAGE_CLOCK:    drawClockPage(); break;
+    case PAGE_WEATHER:  drawWeatherPage(); break;
+    case PAGE_MUSIC:    drawMusicPage(); break;
+    case PAGE_SETTINGS: drawSettingsPage(); break;
   }
 }
 
@@ -568,9 +636,8 @@ void handleTouch(){
       int16_t dx=tdLX-tdSX, dy=tdLY-tdSY;
       if(abs(dx)>40 && abs(dx)>abs(dy)){
         tdSwiped=true;
-        USBSerial.printf("swipe dx=%d\n",dx);
-        if(dx<0) showPage((Page)((page+1)%4));
-        else     showPage((Page)((page+3)%4));
+        if(dx<0) showPage((Page)((page+1)%5));
+        else     showPage((Page)((page+4)%5));
       }
     }
     if(page==PAGE_MUSIC&&!tdSwiped&&millis()-tdMs<350){
@@ -578,7 +645,11 @@ void handleTouch(){
       else if(tx>SCR_W-120) sendKey(0xB5);
       else if(abs(tx-SCR_W/2)<60){blePlaying=!blePlaying;sendKey(0xCD);drawMusicPage();}
     }
-  } else { tdDown=false; }
+  } else {
+    if (tdDown && !tdSwiped && page==PAGE_SETTINGS)
+      handleSettingsTap(tdLY);
+    tdDown=false;
+  }
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
