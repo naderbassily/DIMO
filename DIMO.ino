@@ -12,6 +12,8 @@
 #include <Arduino.h>
 #include <Wire.h>
 #include <WiFi.h>
+#include <WebServer.h>
+#include <Preferences.h>
 #include <HTTPClient.h>
 #include <time.h>
 #include <math.h>
@@ -36,12 +38,17 @@ Arduino_DataBus *bus = new Arduino_ESP32QSPI(5,0,1,2,3,4);
 Arduino_SH8601  *gfx = new Arduino_SH8601(bus, GFX_NOT_DEFINED, 0, SCR_W, SCR_H);
 
 // ── Credentials ───────────────────────────────────────────────────────────────
-const char *WIFI_SSID = "Bassily - IoT";
-const char *WIFI_PASS = "@Bassily199711412";
-const char *OWM_URL   = "http://api.openweathermap.org/data/2.5/weather"
-                        "?q=Cumming,GA,US&units=imperial"
-                        "&appid=898dec73df9c4e262a862baa0c11028f";
-const char *TZ_INFO   = "EST5EDT,M3.2.0/2,M11.1.0/2";
+char wifiSSID[64] = "Bassily - IoT";        // overwritten from NVS on boot
+char wifiPass[64] = "@Bassily199711412";
+const char *OWM_URL = "http://api.openweathermap.org/data/2.5/weather"
+                      "?q=Cumming,GA,US&units=imperial"
+                      "&appid=898dec73df9c4e262a862baa0c11028f";
+const char *TZ_INFO = "EST5EDT,M3.2.0/2,M11.1.0/2";
+
+// ── WiFi portal ───────────────────────────────────────────────────────────────
+Preferences  prefs;
+WebServer    portalServer(80);
+bool         portalActive = false;
 
 // ── Colors ────────────────────────────────────────────────────────────────────
 #define BLACK     0x0000
@@ -582,9 +589,10 @@ void drawMusicPage() {
 // ─────────────────────────────────────────────────────────────────────────────
 //  SETTINGS PAGE
 // ─────────────────────────────────────────────────────────────────────────────
-#define SET_ROW_Y1  100   // WiFi row top
-#define SET_ROW_Y2  220   // BT row top
-#define SET_ROW_H   100
+#define SET_ROW_Y1  90    // WiFi row top
+#define SET_ROW_Y2  200   // BT row top
+#define SET_ROW_Y3  310   // WiFi Setup row top
+#define SET_ROW_H   92
 
 void drawToggle(int16_t x, int16_t y, bool on) {
   uint16_t bg = on ? 0x0400 : GRAY; // green : gray
@@ -603,48 +611,135 @@ void drawSettingsRow(int16_t ry, const char* label, const char* sub, bool on, ui
   drawToggle(SCR_W-80, ry+34, on);
 }
 
+// ── WiFi portal functions ─────────────────────────────────────────────────────
+void stopPortal() {
+  portalActive = false;
+  portalServer.stop();
+  WiFi.softAPdisconnect(true);
+  WiFi.mode(WIFI_STA);
+  delay(100);
+}
+
+void startPortal() {
+  if (wifiOk) { WiFi.disconnect(); wifiOk=false; }
+  wifiConnecting=false;
+  WiFi.mode(WIFI_AP);
+  WiFi.softAP("DIMO-Setup", "dimo1234");
+  delay(200);
+
+  // Serve setup page
+  portalServer.on("/", HTTP_GET, [](){
+    int n = WiFi.scanNetworks();
+    String opts = "";
+    for (int i=0; i<n; i++)
+      opts += "<option value=\""+WiFi.SSID(i)+"\">"+WiFi.SSID(i)+" ("+WiFi.RSSI(i)+"dBm)</option>";
+    String html = "<!DOCTYPE html><html><head>"
+      "<meta name='viewport' content='width=device-width,initial-scale=1'>"
+      "<title>DIMO WiFi Setup</title>"
+      "<style>body{font-family:sans-serif;background:#111;color:#fff;padding:24px;max-width:400px;margin:auto}"
+      "h2{color:#07FF}select,input{width:100%;padding:12px;margin:8px 0;background:#222;color:#fff;"
+      "border:1px solid #444;border-radius:10px;font-size:16px;box-sizing:border-box}"
+      "button{width:100%;padding:14px;background:#07E0;color:#000;border:none;border-radius:10px;"
+      "font-size:18px;font-weight:bold;margin-top:10px}</style></head><body>"
+      "<h2>DIMO WiFi Setup</h2>"
+      "<p>Select your network:</p>"
+      "<select onchange=\"document.getElementById('s').value=this.value\">"
+      "<option value=''>-- choose --</option>"+opts+"</select>"
+      "<form method='POST' action='/save'>"
+      "<input type='text' name='ssid' id='s' placeholder='Network name (SSID)' required>"
+      "<input type='password' name='pass' placeholder='Password'>"
+      "<button type='submit'>Connect DIMO</button>"
+      "</form></body></html>";
+    portalServer.send(200, "text/html", html);
+  });
+
+  portalServer.on("/save", HTTP_POST, [](){
+    String ssid = portalServer.arg("ssid");
+    String pass = portalServer.arg("pass");
+    if (ssid.length() > 0) {
+      ssid.toCharArray(wifiSSID, sizeof(wifiSSID));
+      pass.toCharArray(wifiPass, sizeof(wifiPass));
+      prefs.begin("dimo", false);
+      prefs.putString("ssid", ssid);
+      prefs.putString("pass", pass);
+      prefs.end();
+      portalServer.send(200, "text/html",
+        "<html><body style='font-family:sans-serif;background:#111;color:#fff;padding:24px'>"
+        "<h2 style='color:#07FF'>Saved!</h2><p>DIMO is connecting to <b>"+ssid+"</b></p>"
+        "<p>You can now reconnect your phone to that network.</p></body></html>");
+      delay(1000);
+      stopPortal();
+      wifiConnecting=true;
+      WiFi.begin(wifiSSID, wifiPass);
+      if (page==PAGE_SETTINGS) drawSettingsPage();
+    } else {
+      portalServer.send(400, "text/html", "<html><body>SSID required</body></html>");
+    }
+  });
+
+  portalServer.begin();
+  portalActive = true;
+}
+
+void drawPortalScreen() {
+  gfx->fillScreen(BLACK);
+  centered("WiFi Setup", 60, CYAN, 2);
+  gfx->drawFastHLine(20, 86, SCR_W-40, DIM);
+  centered("1. On your phone:", 110, WHITE, 1);
+  centered("Connect to WiFi:", 132, DIM, 1);
+  centered("DIMO-Setup", 154, CYAN, 2);
+  centered("Password: dimo1234", 186, DIM, 1);
+  centered("2. Open browser:", 220, WHITE, 1);
+  centered("192.168.4.1", 242, CYAN, 2);
+  centered("3. Enter your WiFi", 276, WHITE, 1);
+  centered("credentials & tap", 294, DIM, 1);
+  centered("Connect DIMO", 312, DIM, 1);
+  // Cancel hint
+  gfx->fillRoundRect(60, 370, SCR_W-120, 44, 10, 0x2104);
+  centered("Tap here to cancel", 386, GRAY, 1);
+}
+
 void drawSettingsPage() {
   gfx->fillScreen(BLACK);
   drawStatusBar();
-
-  // Title
-  gfx->setTextColor(WHITE); gfx->setTextSize(2);
   centered("SETTINGS", 50, WHITE, 2);
-  gfx->drawFastHLine(20, 76, SCR_W-40, DIM);
+  gfx->drawFastHLine(20, 72, SCR_W-40, DIM);
 
-  // WiFi row
-  String wfSub = wifiOk ? String("Connected: ")+WIFI_SSID
+  String wfSub = wifiOk ? String("Connected: ")+wifiSSID
                         : (wifiConnecting ? "Connecting..." : "Off");
   drawSettingsRow(SET_ROW_Y1, "WiFi", wfSub.c_str(), wifiOk||wifiConnecting, 0x02DF);
 
-  // Bluetooth row
   const char* btSub = bleConn ? "Device connected" : (bleEnabled ? "Visible as DIMO" : "Off");
   drawSettingsRow(SET_ROW_Y2, "Bluetooth", btSub, bleEnabled, 0x001F);
 
-  // Nav hints
+  // WiFi setup row (no toggle, just a button-style row)
+  gfx->fillRoundRect(12, SET_ROW_Y3, SCR_W-24, SET_ROW_H-4, 10, 0x18C6);
+  gfx->fillCircle(44, SET_ROW_Y3+42, 20, 0x0289);
+  gfx->setTextColor(WHITE); gfx->setTextSize(1);
+  gfx->setCursor(44-6, SET_ROW_Y3+36); gfx->print("AP");
+  gfx->setTextColor(WHITE); gfx->setTextSize(2);
+  gfx->setCursor(74, SET_ROW_Y3+22); gfx->print("Change Network");
   gfx->setTextColor(DIM); gfx->setTextSize(1);
-  gfx->setCursor(6, SCR_H-14);        gfx->print("< music");
-  gfx->setCursor(SCR_W-72, SCR_H-14); gfx->print("face >");
+  gfx->setCursor(74, SET_ROW_Y3+52); gfx->print(strlen(wifiSSID)>0 ? wifiSSID : "No saved network");
+
+  gfx->setTextColor(DIM); gfx->setTextSize(1);
+  gfx->setCursor(6, SCR_H-14); gfx->print("swipe up for home");
 }
 
 void handleSettingsTap(int16_t y) {
   if (y >= SET_ROW_Y1 && y < SET_ROW_Y1+SET_ROW_H) {
-    // WiFi toggle
-    if (wifiOk) {
-      WiFi.disconnect(); wifiOk=false; wifiConnecting=false; wxOk=false; wxFetched=false;
-    } else if (wifiConnecting) {
-      WiFi.disconnect(); wifiConnecting=false; // cancel attempt
-    } else {
-      wifiConnecting=true;
-      WiFi.begin(WIFI_SSID, WIFI_PASS);
-    }
+    if (wifiOk)           { WiFi.disconnect(); wifiOk=false; wifiConnecting=false; wxOk=false; wxFetched=false; }
+    else if (wifiConnecting) { WiFi.disconnect(); wifiConnecting=false; }
+    else                  { wifiConnecting=true; WiFi.begin(wifiSSID, wifiPass); }
     drawSettingsPage();
   } else if (y >= SET_ROW_Y2 && y < SET_ROW_Y2+SET_ROW_H) {
-    // BLE toggle
     bleEnabled = !bleEnabled;
     if (bleEnabled) BLEDevice::startAdvertising();
     else            BLEDevice::stopAdvertising();
     drawSettingsPage();
+  } else if (y >= SET_ROW_Y3) {
+    startPortal();
+    drawPortalScreen();
   }
 }
 
@@ -863,6 +958,12 @@ void setup(){
   expander.digitalWrite(4,HIGH); expander.digitalWrite(5,HIGH);
   delay(10);
 
+  // Load saved WiFi credentials from NVS
+  prefs.begin("dimo", true);
+  String s=prefs.getString("ssid",""); String p=prefs.getString("pass","");
+  prefs.end();
+  if(s.length()>0){ s.toCharArray(wifiSSID,sizeof(wifiSSID)); p.toCharArray(wifiPass,sizeof(wifiPass)); }
+
   gfx->begin();
   gfx->setBrightness(230);
   gfx->fillScreen(BLACK);
@@ -876,7 +977,7 @@ void setup(){
   WiFi.mode(WIFI_STA);
   WiFi.persistent(false);
   WiFi.setSleep(false);
-  WiFi.begin(WIFI_SSID,WIFI_PASS);
+  WiFi.begin(wifiSSID,wifiPass);
 
   wifiAnimation();
   setupBLE();
@@ -890,6 +991,19 @@ void setup(){
 // ─────────────────────────────────────────────────────────────────────────────
 void loop(){
   uint32_t now=millis();
+
+  // WiFi portal — handle requests + cancel tap
+  if(portalActive){
+    portalServer.handleClient();
+    int16_t tx,ty;
+    if(touchRead(tx,ty) && ty>360){ // tap cancel button area
+      delay(300);
+      stopPortal();
+      showPage(PAGE_SETTINGS);
+    }
+    delay(10);
+    return; // skip all other logic while portal is running
+  }
 
   handleTouch();
 
@@ -943,7 +1057,7 @@ void loop(){
 
   // ── WiFi reconnect ────────────────────────────────────────────────────────
   static uint32_t lastWifiTry=0;
-  if(!wifiOk&&now-lastWifiTry>12000){lastWifiTry=now;WiFi.begin(WIFI_SSID,WIFI_PASS);}
+  if(!wifiOk&&now-lastWifiTry>12000){lastWifiTry=now;WiFi.begin(wifiSSID,wifiPass);}
 
   // ── Weather ───────────────────────────────────────────────────────────────
   if(wifiOk&&!wxFetched){
