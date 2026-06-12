@@ -168,8 +168,7 @@ void drawEyeFull(int16_t cx, int16_t cy) {
   // Small secondary shine — just below primary
   gfx->fillCircle(cx+8,  cy-4,  4, 0xEF7B);
 
-  // Top lash — flat horizontal bar, NOT curved (curved = sad)
-  gfx->fillRoundRect(cx-R+2, cy-R-1, (R-2)*2, 5, 2, LASH_COL);
+  // No eyebrow/lash bar — natural circle edge is enough
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -200,21 +199,28 @@ void blinkOverlay(int16_t cx, int16_t cy, int step) {
 //  CHEEKS — drawn once, never redrawn
 // ─────────────────────────────────────────────────────────────────────────────
 void drawCheeks() {
-  gfx->fillCircle(CK_LX, CK_Y, 22, CHEEK_OUT);
-  gfx->fillCircle(CK_LX, CK_Y, 15, CHEEK_MID);
-  gfx->fillCircle(CK_LX, CK_Y,  8, CHEEK_IN);
-  gfx->fillCircle(CK_RX, CK_Y, 22, CHEEK_OUT);
-  gfx->fillCircle(CK_RX, CK_Y, 15, CHEEK_MID);
-  gfx->fillCircle(CK_RX, CK_Y,  8, CHEEK_IN);
+  // Soft blush — gentle pink, not hot magenta
+  gfx->fillCircle(CK_LX, CK_Y, 22, 0xE00C); // very faint outer
+  gfx->fillCircle(CK_LX, CK_Y, 14, 0xF014); // soft pink mid
+  gfx->fillCircle(CK_LX, CK_Y,  7, 0xFB56); // light pink center
+  gfx->fillCircle(CK_RX, CK_Y, 22, 0xE00C);
+  gfx->fillCircle(CK_RX, CK_Y, 14, 0xF014);
+  gfx->fillCircle(CK_RX, CK_Y,  7, 0xFB56);
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
 //  MOUTH — small U smile, drawn once
 // ─────────────────────────────────────────────────────────────────────────────
 void drawMouth() {
-  for (int x=-28; x<=28; x++) {
-    int16_t y = (int16_t)((float)x*x * 14 / (28*28));
-    gfx->fillRect(MX+x, MY+y, 1, 3, SMILE_COL);
+  // U-shape smile: center is LOW (large y), edges are HIGH (small y)
+  // depth=16 means centre of arc is 16px below edges
+  const int16_t r=30, depth=16;
+  for (int x=-r; x<=r; x++) {
+    int16_t y = depth - (int16_t)((float)x*x * depth / (r*r));
+    uint16_t col = 0xD6DB; // light gray — visible but subtle
+    gfx->drawPixel(MX+x, MY+y,   col);
+    gfx->drawPixel(MX+x, MY+y+1, col);
+    gfx->drawPixel(MX+x, MY+y+2, col);
   }
 }
 
