@@ -77,7 +77,7 @@ const char *TZ_INFO   = "EST5EDT,M3.2.0/2,M11.1.0/2";
 #define SBAR   30     // status bar height
 
 // ── Pages ─────────────────────────────────────────────────────────────────────
-enum Page { PAGE_FACE, PAGE_CLOCK, PAGE_WEATHER, PAGE_MUSIC, PAGE_SETTINGS };
+enum Page { PAGE_FACE, PAGE_HOME, PAGE_CLOCK, PAGE_WEATHER, PAGE_MUSIC, PAGE_SETTINGS };
 Page page = PAGE_FACE;
 
 // ── Blink state (overlay only — no redraw) ───────────────────────────────────
@@ -644,12 +644,116 @@ void handleSettingsTap(int16_t y) {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
+//  HOME PAGE — app grid (Apple Watch style)
+// ─────────────────────────────────────────────────────────────────────────────
+#define ICO_R  40
+#define ICO_Y1 170
+#define ICO_Y2 310
+static const int16_t ICO_X[] = {68, 184, 300};
+
+// Base: glow ring + filled circle + label
+void drawIconBase(int16_t cx, int16_t cy, uint16_t bg, const char* label) {
+  gfx->fillCircle(cx, cy, ICO_R+5, 0x0841);
+  gfx->fillCircle(cx, cy, ICO_R,   bg);
+  gfx->setTextColor(WHITE); gfx->setTextSize(1);
+  gfx->setCursor(cx - (int16_t)(strlen(label)*3), cy+ICO_R+10);
+  gfx->print(label);
+}
+
+void drawGearIcon(int16_t cx, int16_t cy) {
+  gfx->fillCircle(cx, cy, 18, WHITE);
+  gfx->fillCircle(cx, cy,  8, 0x4A49);
+  for (int a=0; a<8; a++) {
+    float r = a*0.785398f;
+    gfx->fillCircle(cx+(int16_t)(cosf(r)*19), cy+(int16_t)(sinf(r)*19), 5, WHITE);
+  }
+}
+
+void drawClockIcon(int16_t cx, int16_t cy) {
+  gfx->drawCircle(cx, cy, 18, CYAN); gfx->drawCircle(cx, cy, 19, CYAN);
+  gfx->drawLine(cx, cy, cx, cy-13, CYAN);
+  gfx->drawLine(cx, cy, cx+9, cy+3, CYAN);
+  gfx->fillCircle(cx, cy, 2, CYAN);
+}
+
+void drawSunIcon(int16_t cx, int16_t cy) {
+  gfx->fillCircle(cx, cy, 10, YELLOW);
+  for (int a=0; a<8; a++) {
+    float r = a*0.785398f;
+    gfx->drawLine(cx+(int16_t)(cosf(r)*14), cy+(int16_t)(sinf(r)*14),
+                  cx+(int16_t)(cosf(r)*21), cy+(int16_t)(sinf(r)*21), YELLOW);
+    gfx->drawLine(cx+(int16_t)(cosf(r)*14)+1, cy+(int16_t)(sinf(r)*14),
+                  cx+(int16_t)(cosf(r)*21)+1, cy+(int16_t)(sinf(r)*21), YELLOW);
+  }
+}
+
+void drawNoteIcon(int16_t cx, int16_t cy) {
+  gfx->fillCircle(cx-5, cy+12, 8, GREEN);
+  gfx->fillRect(cx+2,  cy-14, 3, 24, GREEN);
+  gfx->fillRect(cx+2,  cy-14, 18, 3,  GREEN);
+  gfx->fillCircle(cx+11, cy-14, 4, GREEN);
+  gfx->fillRect(cx+8,  cy-14, 3, 12, GREEN);
+}
+
+void drawHomePage() {
+  gfx->fillScreen(BLACK);
+
+  // Header
+  gfx->setTextColor(WHITE); gfx->setTextSize(3);
+  gfx->setCursor(20, 38); gfx->print("DIMO");
+  gfx->setTextColor(DIM);  gfx->setTextSize(1);
+  gfx->setCursor(110, 50); gfx->print("apps");
+  gfx->drawFastHLine(0, 72, SCR_W, 0x2104);
+
+  // Row 1
+  drawIconBase(ICO_X[0], ICO_Y1, 0x4A49, "Settings"); drawGearIcon(ICO_X[0], ICO_Y1);
+  drawIconBase(ICO_X[1], ICO_Y1, 0x0289, "Clock");    drawClockIcon(ICO_X[1], ICO_Y1);
+  drawIconBase(ICO_X[2], ICO_Y1, 0x6200, "Weather");  drawSunIcon(ICO_X[2], ICO_Y1);
+
+  // Row 2
+  drawIconBase(ICO_X[0], ICO_Y2, 0x0240, "Music");    drawNoteIcon(ICO_X[0], ICO_Y2);
+
+  // Placeholder spots
+  gfx->fillCircle(ICO_X[1], ICO_Y2, ICO_R, 0x1082);
+  gfx->setTextColor(DIM); gfx->setTextSize(2);
+  gfx->setCursor(ICO_X[1]-6, ICO_Y2-8); gfx->print("+");
+  gfx->setTextColor(DIM); gfx->setTextSize(1);
+  gfx->setCursor(ICO_X[1]-12, ICO_Y2+ICO_R+10); gfx->print("soon");
+
+  gfx->fillCircle(ICO_X[2], ICO_Y2, ICO_R, 0x1082);
+  gfx->setCursor(ICO_X[2]-6, ICO_Y2-8); gfx->print("+");
+  gfx->setTextSize(1);
+  gfx->setCursor(ICO_X[2]-12, ICO_Y2+ICO_R+10); gfx->print("soon");
+
+  // Nav hint
+  gfx->setTextColor(DIM); gfx->setTextSize(1);
+  centered("swipe up to return", SCR_H-14, DIM, 1);
+}
+
+void handleHomeTap(int16_t tx, int16_t ty) {
+  struct { int16_t cx, cy; Page p; } icons[] = {
+    {ICO_X[0], ICO_Y1, PAGE_SETTINGS},
+    {ICO_X[1], ICO_Y1, PAGE_CLOCK},
+    {ICO_X[2], ICO_Y1, PAGE_WEATHER},
+    {ICO_X[0], ICO_Y2, PAGE_MUSIC},
+  };
+  for (int i=0; i<4; i++) {
+    int16_t dx=tx-icons[i].cx, dy=ty-icons[i].cy;
+    if ((int32_t)dx*dx+(int32_t)dy*dy < (ICO_R+8)*(ICO_R+8)) {
+      showPage(icons[i].p);
+      return;
+    }
+  }
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
 //  Page switcher
 // ─────────────────────────────────────────────────────────────────────────────
 void showPage(Page p) {
   page = p;
   switch(p){
     case PAGE_FACE:     drawFacePage(); drawStatusBar(); blinkState=BLINK_OPEN; blinkTimer=millis(); nextBlink=5000; break;
+    case PAGE_HOME:     drawHomePage(); break;
     case PAGE_CLOCK:    drawClockPage(); break;
     case PAGE_WEATHER:  drawWeatherPage(); break;
     case PAGE_MUSIC:    drawMusicPage(); break;
@@ -699,22 +803,44 @@ void handleTouch(){
       tdDown=true; tdSX=tx; tdSY=ty; tdLX=tx; tdLY=ty;
       tdMs=millis(); tdSwiped=false;
     } else { tdLX=tx; tdLY=ty; }
+
     if(!tdSwiped){
       int16_t dx=tdLX-tdSX, dy=tdLY-tdSY;
-      if(abs(dx)>40 && abs(dx)>abs(dy)){
+      bool hSwipe = abs(dx)>45 && abs(dx)>abs(dy);
+      bool vSwipe = abs(dy)>50 && abs(dy)>abs(dx);
+
+      if(vSwipe){
         tdSwiped=true;
-        if(dx<0) showPage((Page)((page+1)%5));
-        else     showPage((Page)((page+4)%5));
+        if(dy>0 && page==PAGE_FACE){
+          // Swipe DOWN on face → open app grid
+          showPage(PAGE_HOME);
+        } else if(dy<0){
+          // Swipe UP → go back
+          if(page==PAGE_HOME) showPage(PAGE_FACE);
+          else if(page!=PAGE_FACE) showPage(PAGE_HOME);
+        }
+      } else if(hSwipe){
+        // Horizontal — only navigate between content pages opened from home
+        tdSwiped=true;
+        if(page==PAGE_CLOCK||page==PAGE_WEATHER||page==PAGE_MUSIC){
+          const Page ring[]={PAGE_CLOCK,PAGE_WEATHER,PAGE_MUSIC};
+          int cur=0; for(int i=0;i<3;i++) if(ring[i]==page){cur=i;break;}
+          showPage(dx<0 ? ring[(cur+1)%3] : ring[(cur+2)%3]);
+        }
       }
     }
+
+    // Music controls tap (not swipe, within 350ms)
     if(page==PAGE_MUSIC&&!tdSwiped&&millis()-tdMs<350){
-      if(tx<120)          sendKey(0xB6);
-      else if(tx>SCR_W-120) sendKey(0xB5);
+      if(tx<120)               sendKey(0xB6);
+      else if(tx>SCR_W-120)    sendKey(0xB5);
       else if(abs(tx-SCR_W/2)<60){blePlaying=!blePlaying;sendKey(0xCD);drawMusicPage();}
     }
   } else {
-    if (tdDown && !tdSwiped && page==PAGE_SETTINGS)
-      handleSettingsTap(tdLY);
+    if(tdDown&&!tdSwiped){
+      if(page==PAGE_HOME)     handleHomeTap(tdLX,tdLY);
+      if(page==PAGE_SETTINGS) handleSettingsTap(tdLY);
+    }
     tdDown=false;
   }
 }
