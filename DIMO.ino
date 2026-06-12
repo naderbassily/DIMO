@@ -86,6 +86,11 @@ BlinkState blinkState = BLINK_OPEN;
 uint32_t   blinkTimer = 0;
 uint32_t   nextBlink  = 5000;
 
+// ── Gaze (left/right eye animation) ──────────────────────────────────────────
+int8_t   gazeDir   = 0;      // -12 = left, 0 = center, 12 = right
+uint32_t gazeTimer = 0;
+uint32_t nextGaze  = 4000;
+
 // ── WiFi / weather ────────────────────────────────────────────────────────────
 bool     wifiOk   = false;
 String   wxTemp   = "--";
@@ -150,13 +155,13 @@ bool touchRead(int16_t &x, int16_t &y) {
 //  DRAW EYE — called ONCE when face is shown, not in loop
 //  Round white eye, dark iris, pupil, two shine dots — exactly like reference
 // ─────────────────────────────────────────────────────────────────────────────
-void drawEyeFull(int16_t cx, int16_t cy) {
+void drawEyeFull(int16_t cx, int16_t cy, int8_t gaze = 0) {
   int16_t R = EYE_R; // 44
-  gfx->fillCircle(cx, cy, R,    WHITE);     // white sclera
-  gfx->fillCircle(cx, cy, R-12, IRIS_COL); // dark blue iris
-  gfx->fillCircle(cx, cy, R-22, BLACK);    // pupil
-  gfx->fillCircle(cx+13, cy-13, 8, WHITE); // main shine
-  gfx->fillCircle(cx-8,  cy+10, 4, 0xCF1B); // soft secondary shine
+  gfx->fillCircle(cx, cy, R, WHITE);                    // white sclera
+  gfx->fillCircle(cx+gaze, cy, R-12, IRIS_COL);        // iris follows gaze
+  gfx->fillCircle(cx+gaze, cy, R-25, BLACK);            // smaller pupil
+  gfx->fillCircle(cx+gaze+11, cy-12, 8, WHITE);         // shine follows gaze
+  gfx->fillCircle(cx+gaze-7,  cy+10, 4, 0xCF1B);       // secondary shine
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -178,8 +183,8 @@ void blinkOverlay(int16_t cx, int16_t cy, int step) {
     gfx->fillCircle(cx, cy, R+1, BLACK);
     gfx->fillRoundRect(cx-R+6, cy-3, (R-6)*2, 7, 3, LASH_COL);
   } else {
-    // Open — restore eye
-    drawEyeFull(cx, cy);
+    // Open — restore eye with current gaze
+    drawEyeFull(cx, cy, gazeDir);
   }
 }
 
@@ -196,13 +201,14 @@ void drawCheeks() {
 //  MOUTH — small U smile, drawn once
 // ─────────────────────────────────────────────────────────────────────────────
 void drawMouth() {
-  // Small cyan U-smile — matches EMO reference, matches eye color
-  const int16_t r=26, depth=13;
+  const int16_t r=30, depth=14;
   for (int x=-r; x<=r; x++) {
     int16_t y = depth - (int16_t)((float)x*x * depth / (r*r));
-    gfx->drawPixel(MX+x, MY+y,   0x07BF);
-    gfx->drawPixel(MX+x, MY+y+1, 0x07BF);
-    gfx->drawPixel(MX+x, MY+y+2, 0x075F);
+    gfx->drawPixel(MX+x, MY+y,   IRIS_COL);
+    gfx->drawPixel(MX+x, MY+y+1, IRIS_COL);
+    gfx->drawPixel(MX+x, MY+y+2, IRIS_COL);
+    gfx->drawPixel(MX+x, MY+y+3, IRIS_COL);
+    gfx->drawPixel(MX+x, MY+y+4, LASH_COL);
   }
 }
 
@@ -233,11 +239,20 @@ void drawSparkles(bool on) {
 // ─────────────────────────────────────────────────────────────────────────────
 void drawFacePage() {
   gfx->fillScreen(BLACK);
-  drawEyeFull(EL_X, EY_Y);
-  drawEyeFull(ER_X, EY_Y);
+  drawEyeFull(EL_X, EY_Y, gazeDir);
+  drawEyeFull(ER_X, EY_Y, gazeDir);
   drawCheeks();
   drawMouth();
   drawSparkles(true);
+}
+
+void updateGaze(int8_t newDir) {
+  gazeDir = newDir;
+  // Erase just the eye circle and redraw — no full screen clear
+  gfx->fillCircle(EL_X, EY_Y, EYE_R+1, BLACK);
+  gfx->fillCircle(ER_X, EY_Y, EYE_R+1, BLACK);
+  drawEyeFull(EL_X, EY_Y, gazeDir);
+  drawEyeFull(ER_X, EY_Y, gazeDir);
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -621,6 +636,16 @@ void loop(){
       lastSpk=now;
       spkOn=!spkOn;
       drawSparkles(spkOn);
+    }
+
+    // Gaze animation — look left, center, right
+    if (blinkState == BLINK_OPEN && now - gazeTimer > nextGaze) {
+      gazeTimer = now;
+      nextGaze  = random(3000, 7000);
+      static const int8_t dirs[] = {-12, 0, 12, 0};
+      static uint8_t gazeIdx = 0;
+      gazeIdx = (gazeIdx + 1) % 4;
+      updateGaze(dirs[gazeIdx]);
     }
 
     // Blink state machine — overlay only, no eye redraw
