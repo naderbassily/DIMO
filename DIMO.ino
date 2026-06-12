@@ -1,8 +1,10 @@
 /*
- * DIMO — Robot companion, Waveshare ESP32-C6 Touch AMOLED 1.8"
- * 368x448 SH8601 QSPI | FT3168 touch | XCA9554 power
+ * DIMO — Desktop Robot Companion
+ * Waveshare ESP32-C6 Touch AMOLED 1.8" (368x448)
+ * Phase 1: Face + Clock + Weather + Touch navigation
  *
- * Flicker-free: static body drawn once, only eye/mouth regions redrawn on change.
+ * Face fills the screen — no body drawn, just expressive face on black.
+ * Partial redraws only — no flicker.
  */
 
 #include <Arduino.h>
@@ -39,140 +41,115 @@ const char *OWM_URL   = "http://api.openweathermap.org/data/2.5/weather"
                         "&appid=898dec73df9c4e262a862baa0c11028f";
 const char *TZ_INFO   = "EST5EDT,M3.2.0/2,M11.1.0/2";
 
-// ── Colors ────────────────────────────────────────────────────────────────────
-#define BG      0x0821   // very dark blue-black
-#define WHITE   0xFFFF
-#define GRAY    0x7BEF
-#define DIM     0x39E7
-#define YELLOW  0xFFE0
-#define CYAN    0x07FF
-#define PINK    0xFB56
-#define RED     0xF800
-#define GREEN   0x07E0
-#define ORANGE  0xFD20
-#define PURPLE  0x801F
-#define LBLUE   0x3DFF  // light blue body
-#define DBODY   0x1082  // dark body
-#define CHEEK   0xFB8C
+// ── Color palette (matches reference) ─────────────────────────────────────────
+#define BLACK     0x0000
+#define WHITE     0xFFFF
+#define ECYAN     0x07FF   // eye cyan
+#define ECYAN2    0x05DF   // eye mid glow
+#define ECYAN3    0x0410   // eye outer glow
+#define ECYAN4    0x020C   // eye halo
+#define EWHITE    0xCFFF   // eye inner bright
+#define PINK      0xFB4C   // cheeks / love
+#define PINK2     0xF8A0   // cheek inner
+#define RED       0xF800
+#define GREEN     0x07E0
+#define YELLOW    0xFFE0
+#define GRAY      0x7BEF
+#define DIM       0x2965
+#define CYAN      0x07FF
+#define PURPLE    0xC81F
+#define ORANGE    0xFD20
+#define DBLUE     0x000D   // very dark blue (status bar bg)
 
-// ── Pages & moods ─────────────────────────────────────────────────────────────
+// ── Face layout constants ─────────────────────────────────────────────────────
+#define ELX   124    // left eye centre X
+#define ERX   244    // right eye centre X
+#define EY    188    // eye centre Y
+#define CKL   88     // left cheek X
+#define CKR   280    // right cheek X
+#define CKY   248    // cheek Y
+#define MX    184    // mouth centre X
+#define MY    318    // mouth centre Y
+#define SBAR  32     // status bar height
+
+// ── Pages ─────────────────────────────────────────────────────────────────────
 enum Page { PAGE_FACE, PAGE_CLOCK, PAGE_WEATHER, PAGE_MUSIC };
 Page page = PAGE_FACE;
 
-enum Mood { MOOD_HAPPY, MOOD_EXCITED, MOOD_CUTE, MOOD_THINKING,
-            MOOD_SLEEPY, MOOD_SAD, MOOD_SURPRISED, MOOD_ANGRY,
-            MOOD_LOVE, MOOD_PARTY };
+// ── Moods ─────────────────────────────────────────────────────────────────────
+enum Mood {
+  MOOD_HAPPY, MOOD_EXCITED, MOOD_CUTE, MOOD_THINKING,
+  MOOD_SLEEPY, MOOD_SAD, MOOD_SURPRISED, MOOD_ANGRY,
+  MOOD_LOVE, MOOD_PARTY
+};
 Mood mood     = MOOD_HAPPY;
-Mood prevMood = (Mood)-1;
+Mood prevMood = (Mood)255;
 
-// ── Face dirty flags — only redraw what changed ───────────────────────────────
+// ── Dirty flags (partial redraws) ─────────────────────────────────────────────
+bool dirtyAll    = true;
 bool dirtyEyes   = true;
 bool dirtyMouth  = true;
-bool dirtyBody   = true;   // first draw
 bool dirtyStatus = true;
 
-// ── Blink state ───────────────────────────────────────────────────────────────
-bool     blinking    = false;
-bool     prevBlink   = false;
-uint32_t lastBlink   = 0;
-uint32_t blinkStart  = 0;
+// ── Blink ─────────────────────────────────────────────────────────────────────
+bool     blinking   = false;
+bool     prevBlink  = false;
+uint32_t lastBlink  = 0;
+uint32_t blinkStart = 0;
 
 // ── Eye wander ────────────────────────────────────────────────────────────────
-int8_t   eyeOX = 0, eyeOY = 0;
-int8_t   prevEyeOX = 99;
-uint32_t lastEyeMove = 0;
+int8_t   eyeOX=0, eyeOY=0;
+int8_t   pEyeOX=99;
+uint32_t lastEyeMove=0;
 
-// ── Mood auto-cycle ───────────────────────────────────────────────────────────
-uint32_t lastMoodChange = 0;
-uint32_t moodDuration   = 9000;
+// ── Mood cycle ────────────────────────────────────────────────────────────────
+uint32_t lastMoodChange=0;
+uint32_t moodDur=10000;
 
-// ── WiFi / Weather ────────────────────────────────────────────────────────────
-bool     wifiOk     = false;
-String   wxTemp     = "--";
-String   wxDesc     = "loading";
-bool     wxOk       = false;
-uint32_t lastWxFetch= 0;
-bool     wxFetched  = false;
+// ── WiFi / weather ────────────────────────────────────────────────────────────
+bool     wifiOk=false;
+String   wxTemp="--";
+String   wxDesc="";
+bool     wxOk=false;
+bool     wxFetched=false;
+uint32_t lastWxFetch=0;
 
 // ── Touch ─────────────────────────────────────────────────────────────────────
-bool     tdDown      = false;
-int16_t  tdStartX    = 0, tdStartY = 0;
-int16_t  tdLastX     = 0, tdLastY  = 0;
-uint32_t tdStartMs   = 0;
-bool     tdSwiped    = false;
+bool     tdDown=false;
+int16_t  tdSX=0, tdSY=0, tdLX=0, tdLY=0;
+uint32_t tdMs=0;
+bool     tdSwiped=false;
 
 // ── BLE ───────────────────────────────────────────────────────────────────────
-bool              bleConn  = false;
-BLEHIDDevice     *bleHID   = nullptr;
-BLECharacteristic*bleIn    = nullptr;
-bool              blePlaying= false;
+bool              bleConn=false;
+BLEHIDDevice     *bleHID=nullptr;
+BLECharacteristic*bleIn=nullptr;
+bool              blePlaying=false;
 
 // ─────────────────────────────────────────────────────────────────────────────
-//  Geometry constants (portrait 368×448)
-// ─────────────────────────────────────────────────────────────────────────────
-// Head box: x=44 y=60 w=280 h=240
-#define HEAD_X   44
-#define HEAD_Y   60
-#define HEAD_W   280
-#define HEAD_H   240
-#define HEAD_R   40
-
-// Eyes (centres)
-#define EL_X     130
-#define ER_X     238
-#define E_Y      172    // eye centre Y
-#define EYE_RX   32     // eye X radius (normal)
-#define EYE_RY   30     // eye Y radius (normal)
-
-// Mouth
-#define M_X      184
-#define M_Y      252
-
-// Cheeks
-#define CL_X     100
-#define CR_X     268
-#define C_Y      210
-
-// Antenna
-#define ANT_X    184
-#define ANT_TOP  18
-#define ANT_H    44
-
-// Torso
-#define TOR_X    104
-#define TOR_Y    310
-#define TOR_W    160
-#define TOR_H    72
-
-// Status bar
-#define SBAR_H   40
-
-// ─────────────────────────────────────────────────────────────────────────────
-//  Tiny helpers
+//  Helpers
 // ─────────────────────────────────────────────────────────────────────────────
 void centered(const char *s, int16_t y, uint16_t col, uint8_t sz=1) {
   gfx->setTextSize(sz);
   gfx->setTextColor(col);
-  gfx->setCursor((W - strlen(s)*6*sz)/2, y);
+  gfx->setCursor((W-(int16_t)(strlen(s)*6*sz))/2, y);
   gfx->print(s);
 }
 
 float jsonF(const String &b, const char *k) {
-  String key = String("\"")+k+"\":";
-  int i = b.indexOf(key);
-  if (i<0) return NAN;
-  return b.substring(i+key.length(), i+key.length()+10).toFloat();
+  String key=String("\"")+k+"\":";
+  int i=b.indexOf(key); if(i<0) return NAN;
+  return b.substring(i+key.length(),i+key.length()+10).toFloat();
 }
 String jsonS(const String &b, const char *k) {
-  String key = String("\"")+k+"\":\"";
-  int i = b.indexOf(key);
-  if (i<0) return "";
+  String key=String("\"")+k+"\":\"";
+  int i=b.indexOf(key); if(i<0) return "";
   int s=i+key.length(), e=b.indexOf('"',s);
   return b.substring(s,e);
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-//  Touch read (FT3168 I2C 0x38)
+//  Touch (FT3168 I2C 0x38)
 // ─────────────────────────────────────────────────────────────────────────────
 bool touchRead(int16_t &x, int16_t &y) {
   Wire.beginTransmission(0x38);
@@ -180,388 +157,579 @@ bool touchRead(int16_t &x, int16_t &y) {
   if (Wire.endTransmission(false)!=0) return false;
   Wire.requestFrom(0x38,6);
   if (Wire.available()<6) return false;
-  uint8_t td=Wire.read(), xh=Wire.read(), xl=Wire.read(),
-             yh=Wire.read(), yl=Wire.read();
+  uint8_t td=Wire.read(),xh=Wire.read(),xl=Wire.read(),
+             yh=Wire.read(),yl=Wire.read();
   Wire.read();
-  if ((td&0x0F)==0) return false;
-  if ((xh&0xC0)==0x80) return false;
-  x=((xh&0x0F)<<8)|xl;
-  y=((yh&0x0F)<<8)|yl;
+  if((td&0x0F)==0) return false;
+  if((xh&0xC0)==0x80) return false;
+  x=((xh&0x0F)<<8)|xl; y=((yh&0x0F)<<8)|yl;
   return true;
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-//  Draw static body (head shell + torso + antenna) — called once per page switch
+//  Eye drawing — glowing cyan orbs matching reference
 // ─────────────────────────────────────────────────────────────────────────────
-void drawBody() {
-  gfx->fillScreen(BG);
 
-  // Antenna pole
-  gfx->fillRect(ANT_X-3, ANT_TOP, 6, ANT_H, GRAY);
-  // Antenna bulb
-  gfx->fillCircle(ANT_X, ANT_TOP-2, 11, CYAN);
-  gfx->drawCircle(ANT_X, ANT_TOP-2, 11, WHITE);
-  gfx->fillCircle(ANT_X, ANT_TOP-2, 5, WHITE);
+// Clear region around an eye
+void clearEyeRegion(int16_t cx, int16_t cy, int16_t r=52) {
+  gfx->fillRect(cx-r, cy-r-10, r*2, r*2+20, BLACK);
+}
 
-  // Head shell
-  gfx->fillRoundRect(HEAD_X, HEAD_Y, HEAD_W, HEAD_H, HEAD_R, DBODY);
-  gfx->drawRoundRect(HEAD_X, HEAD_Y, HEAD_W, HEAD_H, HEAD_R, GRAY);
-  gfx->drawRoundRect(HEAD_X+2, HEAD_Y+2, HEAD_W-4, HEAD_H-4, HEAD_R-2, DIM);
+// Glowing orb eye (normal/large/wide)
+void drawGlowEye(int16_t cx, int16_t cy, int16_t r, int8_t ox, int8_t oy) {
+  int16_t px=cx+ox, py=cy+oy;
+  gfx->fillCircle(px, py, r+14, ECYAN4);
+  gfx->fillCircle(px, py, r+8,  ECYAN3);
+  gfx->fillCircle(px, py, r,    ECYAN2);
+  gfx->fillCircle(px, py, r-6,  ECYAN);
+  gfx->fillCircle(px, py, r-14, EWHITE);
+  // shine
+  gfx->fillCircle(px+r/3, py-r/3, r/6+1, WHITE);
+}
 
-  // Ear nubs
-  gfx->fillRoundRect(HEAD_X-14, E_Y-14, 16, 28, 6, DBODY);
-  gfx->drawRoundRect(HEAD_X-14, E_Y-14, 16, 28, 6, GRAY);
-  gfx->fillRoundRect(HEAD_X+HEAD_W-2, E_Y-14, 16, 28, 6, DBODY);
-  gfx->drawRoundRect(HEAD_X+HEAD_W-2, E_Y-14, 16, 28, 6, GRAY);
+// Squinted eye (excited/cute squint) — bottom arc only
+void drawSquintEye(int16_t cx, int16_t cy, int16_t r) {
+  for (int x=-r; x<=r; x++) {
+    int yy=(int)sqrt(max(0.0f,(float)(r*r-x*x)));
+    gfx->fillRect(cx+x, cy, 1, yy+3, ECYAN);
+    gfx->fillRect(cx+x, cy, 1, yy+5, ECYAN2);
+  }
+  // glow above arc
+  gfx->drawFastHLine(cx-r, cy-2, r*2, ECYAN3);
+}
 
-  // Torso
-  gfx->fillRoundRect(TOR_X, TOR_Y, TOR_W, TOR_H, 16, DBODY);
-  gfx->drawRoundRect(TOR_X, TOR_Y, TOR_W, TOR_H, 16, GRAY);
-  // chest light
-  gfx->fillCircle(W/2, TOR_Y+22, 10, CYAN);
-  gfx->drawCircle(W/2, TOR_Y+22, 10, WHITE);
-  gfx->fillCircle(W/2, TOR_Y+22, 5, WHITE);
-  // belly buttons
-  for (int i=-1;i<=1;i++)
-    gfx->fillRoundRect(W/2+i*28-8, TOR_Y+46, 16, 10, 4, DIM);
+// Closed eye — horizontal rounded line
+void drawClosedEye(int16_t cx, int16_t cy) {
+  gfx->fillRoundRect(cx-32, cy-4, 64, 8, 4, ECYAN2);
+  gfx->fillRoundRect(cx-28, cy-2, 56, 4, 2, ECYAN);
+}
 
-  // Name tag
-  gfx->setTextColor(CYAN); gfx->setTextSize(1);
-  gfx->setCursor(W/2-14, TOR_Y+TOR_H+8);
-  gfx->print("DIMO");
+// Droopy / sleepy — top half filled, bottom drooped
+void drawSleepyEye(int16_t cx, int16_t cy, int16_t r) {
+  // full orb
+  gfx->fillCircle(cx, cy, r, ECYAN3);
+  gfx->fillCircle(cx, cy, r-6, ECYAN2);
+  // cover top 60% with black = droopy look
+  gfx->fillRect(cx-r-2, cy-r-2, (r+2)*2, r+8, BLACK);
+  // redraw visible bottom arc
+  gfx->fillCircle(cx, cy+4, r-4, ECYAN2);
+  gfx->fillCircle(cx, cy+4, r-10, ECYAN);
+  gfx->fillCircle(cx, cy+4, r-18, EWHITE);
+}
+
+// Angry eye — narrow slash
+void drawAngryEye(int16_t cx, int16_t cy, int16_t r, bool leftSide) {
+  gfx->fillCircle(cx, cy, r, ECYAN3);
+  gfx->fillCircle(cx, cy, r-6, ECYAN2);
+  // cover with angled black rect
+  int slant = leftSide ? -14 : 14;
+  gfx->fillTriangle(cx-r-2, cy-r-2,
+                    cx+r+2, cy-r-2,
+                    cx+(leftSide?r:-r), cy+slant, BLACK);
+  gfx->fillCircle(cx, cy+8, r-10, ECYAN);
+  gfx->fillCircle(cx, cy+8, r-18, EWHITE);
+}
+
+// Heart eye (love mood)
+void drawHeartEye(int16_t cx, int16_t cy) {
+  int16_t s=22;
+  gfx->fillCircle(cx-s/2, cy-s/4, s/2, PINK);
+  gfx->fillCircle(cx+s/2, cy-s/4, s/2, PINK);
+  gfx->fillTriangle(cx-s, cy, cx+s, cy, cx, cy+s, PINK);
+  // glow
+  gfx->drawCircle(cx-s/2, cy-s/4, s/2+3, 0xF014);
+  gfx->drawCircle(cx+s/2, cy-s/4, s/2+3, 0xF014);
+}
+
+// Crescent / looking-side (thinking mood)
+void drawCrescentEye(int16_t cx, int16_t cy, int16_t r, int dir) {
+  // full orb
+  gfx->fillCircle(cx, cy, r+10, ECYAN4);
+  gfx->fillCircle(cx, cy, r,    ECYAN2);
+  gfx->fillCircle(cx, cy, r-6,  ECYAN);
+  // overlay offset circle to create crescent
+  gfx->fillCircle(cx+dir*14, cy, r-2, BLACK);
+  // thin glow on exposed edge
+  for(int a=0;a<360;a+=6) {
+    float rad=a*PI/180;
+    int px=cx+(int)((r+2)*cos(rad));
+    int py=cy+(int)((r+2)*sin(rad));
+    if((dir>0&&px<cx)||(dir<0&&px>cx))
+      gfx->drawPixel(px,py,ECYAN3);
+  }
+}
+
+// Tiny dot (boot stage 1)
+void drawTinyEye(int16_t cx, int16_t cy) {
+  gfx->fillCircle(cx, cy, 8, ECYAN3);
+  gfx->fillCircle(cx, cy, 5, ECYAN);
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-//  Draw eye region (clears old eye area first)
+//  Mouth drawing
 // ─────────────────────────────────────────────────────────────────────────────
-void drawEyeAt(int16_t cx, int16_t cy, bool closed, bool squint,
-               bool wide, bool heart, bool angry, int8_t ox, int8_t oy) {
-  // Clear eye area
-  int16_t ew = 38, eh = 40;
-  gfx->fillRect(cx-ew, cy-eh-2, ew*2, eh*2+24, DBODY);
+void clearMouthRegion() {
+  gfx->fillRect(MX-80, MY-40, 160, 100, BLACK);
+}
 
-  if (closed) {
-    // closed line
-    gfx->fillRoundRect(cx-28, cy-3, 56, 7, 3, WHITE);
+// Smile arc — thickness t
+void drawSmile(int16_t cx, int16_t cy, int16_t r, int16_t depth, uint16_t col, int16_t t=3) {
+  for(int x=-r;x<=r;x++) {
+    int16_t y=(int16_t)((float)x*x*depth/(r*r));
+    for(int tt=0;tt<t;tt++)
+      gfx->drawPixel(cx+x, cy+y+tt, col);
+  }
+}
+
+// Frown (upside-down smile)
+void drawFrown(int16_t cx, int16_t cy, int16_t r, uint16_t col) {
+  for(int x=-r;x<=r;x++) {
+    int16_t y=-(int16_t)((float)x*x*14/(r*r))+20;
+    gfx->drawPixel(cx+x, cy+y, col);
+    gfx->drawPixel(cx+x, cy+y+1, col);
+    gfx->drawPixel(cx+x, cy+y+2, col);
+  }
+}
+
+// Open O mouth (surprised)
+void drawOpenMouth(int16_t cx, int16_t cy, int16_t rx, int16_t ry, uint16_t col) {
+  gfx->fillEllipse(cx, cy, rx, ry, col);
+  gfx->fillEllipse(cx, cy-ry/3, rx-4, ry/3, BLACK);
+}
+
+// Flat line (angry/thinking)
+void drawFlat(int16_t cx, int16_t cy, int16_t hw, uint16_t col) {
+  gfx->fillRoundRect(cx-hw, cy-4, hw*2, 8, 4, col);
+}
+
+// Cheeks
+void drawCheeks(uint16_t outer, uint16_t inner) {
+  gfx->fillCircle(CKL, CKY, 22, outer);
+  gfx->fillCircle(CKL, CKY, 13, inner);
+  gfx->fillCircle(CKR, CKY, 22, outer);
+  gfx->fillCircle(CKR, CKY, 13, inner);
+}
+void clearCheeks() {
+  gfx->fillRect(CKL-28,CKY-28,56,56,BLACK);
+  gfx->fillRect(CKR-28,CKY-28,56,56,BLACK);
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+//  Draw eyes by mood
+// ─────────────────────────────────────────────────────────────────────────────
+void drawEyes() {
+  // clear both eye regions
+  clearEyeRegion(ELX, EY);
+  clearEyeRegion(ERX, EY);
+
+  if(blinking) {
+    drawClosedEye(ELX, EY);
+    drawClosedEye(ERX, EY);
     return;
   }
 
-  int16_t rx = wide ? 36 : (squint ? EYE_RX : EYE_RX);
-  int16_t ry = squint ? 10 : (wide ? 36 : EYE_RY);
-
-  if (heart) {
-    // Heart eyes
-    gfx->fillCircle(cx-9, cy-4, 12, PINK);
-    gfx->fillCircle(cx+9, cy-4, 12, PINK);
-    gfx->fillTriangle(cx-20, cy+2, cx+20, cy+2, cx, cy+20, PINK);
-    gfx->fillCircle(cx, cy+4, 4, PINK);
-  } else {
-    // Eye white
-    gfx->fillEllipse(cx+ox, cy+oy, rx, ry, WHITE);
-
-    if (angry) {
-      // squinted angry — fill top half dark
-      gfx->fillRect(cx+ox-rx, cy+oy-ry, rx*2, ry, DBODY);
-      gfx->fillEllipse(cx+ox, cy+oy, rx, ry/2+2, WHITE);
-    }
-
-    // Pupil
-    gfx->fillCircle(cx+ox+3, cy+oy+3, squint ? 5 : 11, 0x1082);
-    // Shine
-    gfx->fillCircle(cx+ox+7, cy+oy-2, squint ? 2 : 4, WHITE);
-  }
-
-  // Eyelid top line
-  if (!squint && !wide)
-    gfx->drawFastHLine(cx+ox-rx, cy+oy-ry, rx*2, DIM);
-}
-
-void drawEyes() {
-  bool cl = blinking;
-  switch (mood) {
+  switch(mood) {
     case MOOD_HAPPY:
-      drawEyeAt(EL_X, E_Y, cl, false, false, false, false, eyeOX, eyeOY);
-      drawEyeAt(ER_X, E_Y, cl, false, false, false, false, eyeOX, eyeOY);
+      drawGlowEye(ELX, EY, 30, eyeOX, eyeOY);
+      drawGlowEye(ERX, EY, 24, eyeOX, eyeOY); // asymmetric, right slightly smaller
       break;
     case MOOD_EXCITED:
-      drawEyeAt(EL_X, E_Y, cl, false, true, false, false, eyeOX, eyeOY);
-      drawEyeAt(ER_X, E_Y, cl, false, true, false, false, eyeOX, eyeOY);
+      drawSquintEye(ELX, EY+10, 30);
+      drawSquintEye(ERX, EY+10, 30);
       break;
     case MOOD_CUTE:
-      drawEyeAt(EL_X, E_Y, cl, true, false, false, false, 0, 0);
-      drawEyeAt(ER_X, E_Y, cl, true, false, false, false, 0, 0);
+      drawGlowEye(ELX, EY, 34, 0, 0);
+      drawGlowEye(ERX, EY, 34, 0, 0);
       break;
     case MOOD_THINKING:
-      drawEyeAt(EL_X, E_Y, cl, true, false, false, false, 4, 0);
-      drawEyeAt(ER_X, E_Y, cl, false, false, false, false, 4, 0);
+      drawCrescentEye(ELX, EY, 28, 1); // looking right
+      drawGlowEye(ERX, EY, 26, 4, 0);
       break;
     case MOOD_SLEEPY:
-      drawEyeAt(EL_X, E_Y, true, false, false, false, false, 0, 0);
-      drawEyeAt(ER_X, E_Y, true, false, false, false, false, 0, 0);
-      // Zzz
-      gfx->setTextColor(DIM); gfx->setTextSize(2);
-      gfx->setCursor(ER_X+22, E_Y-38); gfx->print("z");
-      gfx->setTextSize(3);
-      gfx->setCursor(ER_X+36, E_Y-62); gfx->print("Z");
+      drawSleepyEye(ELX, EY, 28);
+      drawSleepyEye(ERX, EY, 28);
       break;
     case MOOD_SAD:
-      drawEyeAt(EL_X, E_Y, cl, true, false, false, false, 0, 0);
-      drawEyeAt(ER_X, E_Y, cl, true, false, false, false, 0, 0);
+      drawGlowEye(ELX, EY, 22, 0, 0);
+      drawGlowEye(ERX, EY, 22, 0, 0);
+      // teardrops
+      gfx->fillRect(ELX+4, EY+24, 5, 22, ECYAN3);
+      gfx->fillCircle(ELX+6, EY+46, 7, ECYAN2);
+      gfx->fillRect(ERX+4, EY+24, 5, 22, ECYAN3);
+      gfx->fillCircle(ERX+6, EY+46, 7, ECYAN2);
       break;
     case MOOD_SURPRISED:
-      drawEyeAt(EL_X, E_Y, false, false, true, false, false, 0, 0);
-      drawEyeAt(ER_X, E_Y, false, false, true, false, false, 0, 0);
-      // eyebrows up
-      gfx->fillRoundRect(EL_X-26, E_Y-52, 52, 7, 3, WHITE);
-      gfx->fillRoundRect(ER_X-26, E_Y-52, 52, 7, 3, WHITE);
+      drawGlowEye(ELX, EY, 36, 0, 0);
+      drawGlowEye(ERX, EY, 36, 0, 0);
       break;
     case MOOD_ANGRY:
-      drawEyeAt(EL_X, E_Y, cl, false, false, false, true, 0, 0);
-      drawEyeAt(ER_X, E_Y, cl, false, false, false, true, 0, 0);
-      // angry brows
-      gfx->fillRect(EL_X-24, E_Y-46, 48, 6, RED);
-      for (int i=0;i<6;i++) gfx->drawPixel(EL_X-24+i*2, E_Y-46-i/2, RED);
-      gfx->fillRect(ER_X-24, E_Y-46, 48, 6, RED);
-      for (int i=0;i<6;i++) gfx->drawPixel(ER_X+24-i*2, E_Y-46-i/2, RED);
+      drawAngryEye(ELX, EY, 28, true);
+      drawAngryEye(ERX, EY, 28, false);
       break;
     case MOOD_LOVE:
-      drawEyeAt(EL_X, E_Y, false, false, false, true, false, 0, 0);
-      drawEyeAt(ER_X, E_Y, false, false, false, true, false, 0, 0);
+      drawHeartEye(ELX, EY);
+      drawHeartEye(ERX, EY);
       break;
     case MOOD_PARTY:
-      drawEyeAt(EL_X, E_Y, cl, false, true, false, false, eyeOX, eyeOY);
-      drawEyeAt(ER_X, E_Y, cl, false, true, false, false, eyeOX, eyeOY);
+      drawGlowEye(ELX, EY, 30, eyeOX, eyeOY);
+      drawGlowEye(ERX, EY, 30, eyeOX, eyeOY);
       break;
   }
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-//  Draw mouth + cheeks (clears region first)
+//  Draw mouth + cheeks by mood
 // ─────────────────────────────────────────────────────────────────────────────
 void drawMouth() {
-  // Clear mouth + cheek zone
-  gfx->fillRect(HEAD_X+4, M_Y-30, HEAD_W-8, 80, DBODY);
+  clearMouthRegion();
+  clearCheeks();
 
-  switch (mood) {
+  switch(mood) {
     case MOOD_HAPPY:
+      drawSmile(MX, MY, 52, 20, WHITE, 4);
+      break;
     case MOOD_EXCITED:
-    case MOOD_PARTY: {
-      // big smile arc
-      int r = (mood==MOOD_HAPPY) ? 30 : 40;
-      for (int x=-r; x<=r; x++) {
-        int dy = (int)((float)x*x*18/r/r);
-        gfx->fillRect(M_X+x, M_Y+dy, 1, 3, WHITE);
-      }
-      if (mood==MOOD_EXCITED || mood==MOOD_PARTY) {
-        // cheeks
-        gfx->fillCircle(CL_X, C_Y, 18, CHEEK);
-        gfx->fillCircle(CR_X, C_Y, 18, CHEEK);
-        gfx->fillCircle(CL_X, C_Y, 10, 0xFDB0);
-        gfx->fillCircle(CR_X, C_Y, 10, 0xFDB0);
-      }
+      drawSmile(MX, MY-4, 58, 26, WHITE, 5);
+      drawCheeks(0xF810, PINK2);
       break;
-    }
-    case MOOD_CUTE: {
-      // small w-mouth
-      gfx->fillRoundRect(M_X-20, M_Y-4, 40, 12, 5, PINK);
-      gfx->fillCircle(CL_X, C_Y, 16, CHEEK);
-      gfx->fillCircle(CR_X, C_Y, 16, CHEEK);
+    case MOOD_CUTE:
+      drawSmile(MX, MY, 36, 14, PINK, 4);
+      drawCheeks(PINK, PINK2);
       break;
-    }
-    case MOOD_THINKING: {
-      // flat line offset
-      gfx->fillRoundRect(M_X-22, M_Y, 44, 7, 3, GRAY);
-      // thought bubble
-      gfx->fillCircle(ER_X+26, E_Y-18, 5, DIM);
-      gfx->fillCircle(ER_X+40, E_Y-34, 7, DIM);
-      gfx->fillCircle(ER_X+54, E_Y-54, 11, DIM);
+    case MOOD_THINKING:
+      drawFlat(MX+16, MY+4, 28, GRAY);
+      // thought bubbles top-right
+      gfx->fillCircle(ERX+32, EY-28, 5,  DIM);
+      gfx->fillCircle(ERX+48, EY-48, 8,  DIM);
+      gfx->fillCircle(ERX+62, EY-70, 12, DIM);
       break;
-    }
-    case MOOD_SLEEPY: {
-      gfx->fillRoundRect(M_X-18, M_Y+8, 36, 7, 3, DIM);
+    case MOOD_SLEEPY:
+      drawFlat(MX, MY+8, 22, DIM);
+      // ZZZ
+      gfx->setTextColor(DIM); gfx->setTextSize(2);
+      gfx->setCursor(ERX+24, EY-58); gfx->print("z");
+      gfx->setTextSize(3);
+      gfx->setCursor(ERX+38, EY-82); gfx->print("Z");
+      gfx->setTextSize(4);
+      gfx->setCursor(ERX+52, EY-114); gfx->print("Z");
       break;
-    }
-    case MOOD_SAD: {
-      // downward arc
-      int r=30;
-      for (int x=-r;x<=r;x++) {
-        int dy = -(int)((float)x*x*14/r/r)+16;
-        gfx->fillRect(M_X+x, M_Y+dy, 1, 3, GRAY);
-      }
-      // tears
-      gfx->fillRect(EL_X+6, E_Y+EYE_RY, 4, 20, CYAN);
-      gfx->fillCircle(EL_X+8, E_Y+EYE_RY+20, 5, CYAN);
-      gfx->fillRect(ER_X+6, E_Y+EYE_RY, 4, 20, CYAN);
-      gfx->fillCircle(ER_X+8, E_Y+EYE_RY+20, 5, CYAN);
+    case MOOD_SAD:
+      drawFrown(MX, MY-10, 42, GRAY);
       break;
-    }
-    case MOOD_SURPRISED: {
-      gfx->fillEllipse(M_X, M_Y+4, 20, 28, WHITE);
-      gfx->fillEllipse(M_X, M_Y-10, 20, 8, DBODY);
+    case MOOD_SURPRISED:
+      drawOpenMouth(MX, MY+6, 18, 26, WHITE);
       break;
-    }
-    case MOOD_ANGRY: {
-      gfx->fillRoundRect(M_X-26, M_Y, 52, 8, 3, RED);
-      // steam
-      for (int s=-1;s<=1;s++) {
-        gfx->fillRect(M_X+s*20-2, M_Y-22, 4, 18, RED);
-      }
+    case MOOD_ANGRY:
+      drawFlat(MX, MY, 34, RED);
+      // angry brows
+      gfx->fillRect(ELX-28, EY-52, 56, 7, RED);
+      for(int i=0;i<8;i++) gfx->drawPixel(ELX-28+i*2, EY-52-i/2, RED);
+      gfx->fillRect(ERX-28, EY-52, 56, 7, RED);
+      for(int i=0;i<8;i++) gfx->drawPixel(ERX+28-i*2, EY-52-i/2, RED);
       break;
-    }
-    case MOOD_LOVE: {
-      int r=30;
-      for (int x=-r;x<=r;x++) {
-        int dy=(int)((float)x*x*18/r/r);
-        gfx->fillRect(M_X+x, M_Y+dy, 1, 3, PINK);
-      }
-      gfx->fillCircle(CL_X, C_Y, 16, 0xF810);
-      gfx->fillCircle(CR_X, C_Y, 16, 0xF810);
+    case MOOD_LOVE:
+      drawSmile(MX, MY, 50, 22, PINK, 4);
+      drawCheeks(0xF810, 0xF860);
       // floating hearts
       gfx->setTextColor(PINK); gfx->setTextSize(2);
-      gfx->setCursor(EL_X-44, E_Y-68); gfx->print("<3");
-      gfx->setCursor(ER_X+18, E_Y-78); gfx->print("<3");
+      gfx->setCursor(ELX-52, EY-80); gfx->print("<3");
+      gfx->setCursor(ERX+18, EY-90); gfx->print("<3");
       break;
-    }
+    case MOOD_PARTY:
+      drawSmile(MX, MY-4, 58, 26, YELLOW, 5);
+      drawCheeks(0xFDA0, 0xFFE0);
+      // confetti
+      uint16_t cc[]={YELLOW,PINK,CYAN,GREEN,ORANGE,PURPLE};
+      for(int i=0;i<20;i++) {
+        int cx2=random(20,W-20), cy2=random(SBAR+4,120);
+        gfx->fillCircle(cx2,cy2,4,cc[i%6]);
+      }
+      break;
   }
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-//  Status bar
+//  Status bar (32px at top)
 // ─────────────────────────────────────────────────────────────────────────────
 void drawStatusBar() {
-  gfx->fillRect(0, 0, W, SBAR_H, 0x0000);
+  gfx->fillRect(0,0,W,SBAR,BLACK);
 
   struct tm t;
-  if (getLocalTime(&t, 30)) {
+  if(getLocalTime(&t,30)) {
     char buf[8];
     snprintf(buf,sizeof(buf),"%02d:%02d",t.tm_hour,t.tm_min);
     gfx->setTextColor(WHITE); gfx->setTextSize(2);
-    gfx->setCursor(6, 12); gfx->print(buf);
+    gfx->setCursor(8,7); gfx->print(buf);
   }
 
-  // WiFi indicator
-  uint16_t wc = wifiOk ? GREEN : RED;
-  gfx->fillCircle(W/2, 20, 6, wc);
+  // WiFi dot
+  gfx->fillCircle(W/2, 16, 6, wifiOk ? 0x07E0 : 0xF800);
 
-  if (wxOk) {
-    String s = wxTemp + "F";
+  // Weather temp top-right
+  if(wxOk) {
+    String s=wxTemp+"F";
     gfx->setTextColor(CYAN); gfx->setTextSize(2);
-    gfx->setCursor(W - (int16_t)s.length()*12 - 8, 12);
+    gfx->setCursor(W-(int16_t)s.length()*12-8, 7);
     gfx->print(s);
   }
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-//  Face page — smart partial redraw
+//  Boot animation (5 frames matching reference)
 // ─────────────────────────────────────────────────────────────────────────────
-void drawFacePage() {
-  if (dirtyBody) {
-    dirtyBody  = false;
-    dirtyEyes  = true;
-    dirtyMouth = true;
-    drawBody();
-    drawStatusBar();
+void bootAnimation() {
+  // Frame 1: Power On — tiny dots appear
+  gfx->fillScreen(BLACK);
+  delay(300);
+  gfx->fillCircle(ELX, EY, 6, ECYAN4);
+  gfx->fillCircle(ELX, EY, 3, ECYAN3);
+  gfx->fillCircle(ERX, EY, 6, ECYAN4);
+  gfx->fillCircle(ERX, EY, 3, ECYAN3);
+  delay(400);
+
+  // Frame 2: Eyes Open — growing circles
+  for(int r=4;r<=30;r+=3) {
+    gfx->fillCircle(ELX, EY, r+10, BLACK);
+    gfx->fillCircle(ERX, EY, r+10, BLACK);
+    gfx->fillCircle(ELX, EY, r+4, ECYAN4);
+    gfx->fillCircle(ELX, EY, r,   ECYAN);
+    gfx->fillCircle(ERX, EY, r+4, ECYAN4);
+    gfx->fillCircle(ERX, EY, r,   ECYAN);
+    delay(40);
   }
-  if (dirtyEyes) {
-    dirtyEyes = false;
-    drawEyes();
+  delay(200);
+
+  // Frame 3: Happy face
+  gfx->fillScreen(BLACK);
+  mood=MOOD_HAPPY; blinking=false; eyeOX=0; eyeOY=0;
+  drawEyes(); drawMouth();
+  delay(600);
+
+  // Frame 4: DIMO name
+  gfx->fillScreen(BLACK);
+  gfx->setTextColor(CYAN); gfx->setTextSize(5);
+  int16_t tw=4*30; // "DIMO" ~4 chars * 30px
+  gfx->setCursor((W-tw*2)/2, H/2-40);
+  gfx->print("DIMO");
+  gfx->setTextColor(DIM); gfx->setTextSize(1);
+  centered("desktop friend", H/2+22, DIM, 1);
+  delay(800);
+
+  // Frame 5: Ready — happy with cheeks + sparkle dots
+  gfx->fillScreen(BLACK);
+  drawEyes(); drawMouth();
+  // extra cheek pop
+  gfx->fillCircle(CKL, CKY, 26, 0xF810);
+  gfx->fillCircle(CKL, CKY, 16, PINK2);
+  gfx->fillCircle(CKR, CKY, 26, 0xF810);
+  gfx->fillCircle(CKR, CKY, 16, PINK2);
+  // sparkle stars
+  uint16_t sp[]={0xFFFF,CYAN,YELLOW};
+  for(int i=0;i<6;i++) {
+    int sx=random(30,W-30), sy=random(SBAR+10,H-60);
+    gfx->fillCircle(sx,sy,3,sp[i%3]);
+    gfx->drawLine(sx-7,sy,sx+7,sy,sp[i%3]);
+    gfx->drawLine(sx,sy-7,sx,sy+7,sp[i%3]);
   }
-  if (dirtyMouth) {
-    dirtyMouth = false;
-    drawMouth();
+  delay(700);
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+//  WiFi connecting animation (5 frames)
+// ─────────────────────────────────────────────────────────────────────────────
+void wifiAnimation() {
+  auto drawWifiIcon = [](int16_t cx, int16_t cy, int bars, uint16_t col) {
+    // 3 arcs
+    if(bars>=1) gfx->drawCircle(cx,cy,14,col);
+    if(bars>=2) gfx->drawCircle(cx,cy,26,col);
+    if(bars>=3) gfx->drawCircle(cx,cy,38,col);
+    gfx->fillCircle(cx,cy,5,col);
+    // mask top half
+    gfx->fillRect(cx-44,cy-44,88,44,BLACK);
+  };
+
+  // Frame 1: Looking around left
+  gfx->fillScreen(BLACK);
+  clearEyeRegion(ELX,EY); clearEyeRegion(ERX,EY);
+  drawCrescentEye(ELX,EY,28,-1);
+  drawCrescentEye(ERX,EY,28,-1);
+  drawFlat(MX,MY,28,DIM);
+  delay(500);
+
+  // Frame 2: Scanning — eyes looking right + wifi icon
+  gfx->fillScreen(BLACK);
+  drawCrescentEye(ELX,EY,28,1);
+  drawCrescentEye(ERX,EY,28,1);
+  drawFlat(MX,MY,28,DIM);
+  drawWifiIcon(W/2, H-90, 1, DIM);
+  delay(500);
+
+  // Frame 3: Connecting — eyes forward + 2 bars
+  gfx->fillScreen(BLACK);
+  drawGlowEye(ELX,EY,26,0,0);
+  drawGlowEye(ERX,EY,26,0,0);
+  drawSmile(MX,MY,36,12,DIM,3);
+  drawWifiIcon(W/2, H-90, 2, CYAN);
+  delay(500);
+
+  // Frame 4: Almost — eyes up + 3 bars
+  gfx->fillScreen(BLACK);
+  drawGlowEye(ELX,EY,26,0,-8);
+  drawGlowEye(ERX,EY,26,0,-8);
+  drawSmile(MX,MY,44,18,CYAN,4);
+  drawWifiIcon(W/2, H-90, 3, CYAN);
+  delay(400);
+
+  // Frame 5: Connected! — happy + sparkles
+  gfx->fillScreen(BLACK);
+  mood=MOOD_HAPPY; blinking=false; eyeOX=0; eyeOY=0;
+  drawEyes(); drawMouth();
+  gfx->setTextColor(GREEN); gfx->setTextSize(1);
+  centered("Connected!", H-50, GREEN, 1);
+  // sparkle stars around wifi area
+  for(int i=0;i<5;i++) {
+    int sx=W/2+(i-2)*28, sy=H-80;
+    gfx->fillCircle(sx,sy,3,i%2==0?CYAN:GREEN);
   }
+  delay(800);
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+//  No WiFi animation (offline states)
+// ─────────────────────────────────────────────────────────────────────────────
+void drawOffline() {
+  gfx->fillScreen(BLACK);
+  // sad arched brows
+  gfx->drawLine(ELX-22,EY-50,ELX+22,EY-42,GRAY);
+  gfx->drawLine(ERX-22,EY-42,ERX+22,EY-50,GRAY);
+  // eyes
+  drawGlowEye(ELX,EY,22,0,0);
+  drawGlowEye(ERX,EY,22,0,0);
+  drawFrown(MX,MY-10,38,GRAY);
+  // wifi X icon
+  gfx->drawCircle(W/2,H-90,14,GRAY);
+  gfx->drawCircle(W/2,H-90,26,GRAY);
+  gfx->fillCircle(W/2,H-90,5,GRAY);
+  gfx->fillRect(W/2-44,H-90-44,88,44,BLACK);
+  gfx->drawLine(W/2-8,H-80,W/2+8,H-100,RED);
+  gfx->drawLine(W/2+8,H-80,W/2-8,H-100,RED);
+  gfx->fillCircle(W/2+22,H-70,10,RED);
+  gfx->drawLine(W/2+18,H-72,W/2+26,H-68,BLACK);
+  gfx->drawLine(W/2+18,H-68,W/2+26,H-72,BLACK);
+  centered("No WiFi", H-50, RED, 1);
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
 //  Clock page
 // ─────────────────────────────────────────────────────────────────────────────
 void drawClockPage() {
-  gfx->fillScreen(BG);
+  gfx->fillScreen(BLACK);
 
   struct tm t;
-  if (!getLocalTime(&t, 200)) {
-    centered("Syncing time...", 200, DIM, 2);
+  if(!getLocalTime(&t,200)) {
+    centered("Syncing...", H/2, DIM, 2);
     drawStatusBar();
     return;
   }
 
-  char tb[8], db[24];
-  snprintf(tb,sizeof(tb),"%02d:%02d",t.tm_hour,t.tm_min);
-  strftime(db,sizeof(db),"%A  %b %d",&t);
+  char timeBuf[8], dayBuf[12], dateBuf[14];
+  snprintf(timeBuf,sizeof(timeBuf),"%02d:%02d",t.tm_hour,t.tm_min);
+  strftime(dayBuf,sizeof(dayBuf),"%A",&t);
+  strftime(dateBuf,sizeof(dateBuf),"%b %d",&t);
 
-  // Big time
+  // Sleepy DIMO face (small, top area) matching reference "sleeping" state
+  int16_t fy=95;
+  int16_t felx=ELX, ferx=ERX;
+  // small sleepy eyes
+  gfx->fillCircle(felx,fy,18,ECYAN3);
+  gfx->fillRect(felx-20,fy-20,40,20,BLACK); // droopy
+  gfx->fillCircle(felx,fy+4,10,ECYAN2);
+  gfx->fillCircle(ferx,fy,18,ECYAN3);
+  gfx->fillRect(ferx-20,fy-20,40,20,BLACK);
+  gfx->fillCircle(ferx,fy+4,10,ECYAN2);
+  // flat mouth
+  gfx->fillRoundRect(MX-16,fy+24,32,5,2,DIM);
+
+  // Big time — matching reference (10:30 style)
   gfx->setTextColor(WHITE); gfx->setTextSize(5);
-  int16_t tw = strlen(tb)*30;
-  gfx->setCursor((W-tw)/2, 140); gfx->print(tb);
+  int16_t tw=(int16_t)strlen(timeBuf)*30;
+  gfx->setCursor((W-tw)/2, 170);
+  gfx->print(timeBuf);
 
-  // Date
-  centered(db, 220, GRAY, 2);
+  // Day + date (FRI 24 MAY style)
+  gfx->setTextColor(CYAN); gfx->setTextSize(2);
+  centered(dayBuf, 256, CYAN, 2);
+  centered(dateBuf, 284, DIM, 1);
 
-  // Seconds ring
-  int sec = t.tm_sec;
-  gfx->drawCircle(W/2, 320, 70, DIM);
-  float ang = (sec/60.0f)*2*PI - PI/2;
-  int rx = W/2 + (int)(70*cos(ang));
-  int ry = 320  + (int)(70*sin(ang));
-  gfx->fillCircle(W/2, 320, 4, DIM);
-  gfx->fillCircle(rx, ry, 8, CYAN);
-  gfx->drawCircle(rx, ry, 8, WHITE);
-
-  // Second number
-  char sb[4]; snprintf(sb,sizeof(sb),"%02d",sec);
-  centered(sb, 308, GRAY, 2);
+  // Seconds dot ring
+  gfx->drawCircle(W/2,360,44,DIM);
+  float ang=(t.tm_sec/60.0f)*2*PI-PI/2;
+  gfx->fillCircle(W/2+(int)(44*cos(ang)),360+(int)(44*sin(ang)),7,CYAN);
 
   drawStatusBar();
   gfx->setTextColor(DIM); gfx->setTextSize(1);
   gfx->setCursor(6,H-14); gfx->print("< face");
-  gfx->setCursor(W-60,H-14); gfx->print("weather >");
+  gfx->setCursor(W-66,H-14); gfx->print("weather >");
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-//  Weather page
+//  Weather page — matching reference (icon + temp + desc)
 // ─────────────────────────────────────────────────────────────────────────────
 void drawWeatherPage() {
-  gfx->fillScreen(BG);
+  gfx->fillScreen(BLACK);
   drawStatusBar();
 
-  centered("Cumming, GA", 52, GRAY, 1);
+  centered("Cumming, GA", 46, DIM, 1);
 
-  if (!wifiOk) { centered("No WiFi", 200, RED, 2); goto hints; }
-  if (!wxOk)   { centered("Loading...", 200, DIM, 2); goto hints; }
+  if(!wifiOk) { drawOffline(); return; }
+  if(!wxOk)   { centered("Loading...", H/2, DIM, 2); return; }
 
-  {
-    String ts = wxTemp + " F";
-    gfx->setTextColor(YELLOW); gfx->setTextSize(5);
-    gfx->setCursor((W - ts.length()*30)/2, 110); gfx->print(ts);
-
-    String dc = wxDesc; dc[0]=toupper(dc[0]);
-    centered(dc.c_str(), 200, CYAN, 2);
-
-    // Weather icon
-    int16_t ix=W/2, iy=300;
-    if (wxDesc.indexOf("clear")>=0||wxDesc.indexOf("sun")>=0) {
-      gfx->fillCircle(ix,iy,36,YELLOW);
-      for (int a=0;a<360;a+=45) {
-        gfx->drawLine(ix+(int)(44*cos(a*PI/180)),iy+(int)(44*sin(a*PI/180)),
-                      ix+(int)(58*cos(a*PI/180)),iy+(int)(58*sin(a*PI/180)),YELLOW);
-        gfx->drawLine(ix+(int)(45*cos(a*PI/180)),iy+(int)(45*sin(a*PI/180)),
-                      ix+(int)(57*cos(a*PI/180)),iy+(int)(57*sin(a*PI/180)),YELLOW);
-      }
-    } else if (wxDesc.indexOf("rain")>=0||wxDesc.indexOf("drizzle")>=0||
-               wxDesc.indexOf("storm")>=0) {
-      gfx->fillEllipse(ix,iy-8,44,26,GRAY);
-      gfx->fillEllipse(ix-16,iy-18,28,18,GRAY);
-      for (int d=-2;d<=2;d++) {
-        gfx->fillRect(ix+d*16-2,iy+24,4,20,CYAN);
-      }
-    } else {
-      gfx->fillEllipse(ix,iy,44,24,GRAY);
-      gfx->fillEllipse(ix-16,iy-12,28,18,GRAY);
-      gfx->fillEllipse(ix+14,iy-14,22,16,GRAY);
+  // Weather icon (large, centred)
+  int16_t ix=W/2, iy=190;
+  if(wxDesc.indexOf("clear")>=0||wxDesc.indexOf("sun")>=0) {
+    // Sun
+    gfx->fillCircle(ix,iy,38,YELLOW);
+    for(int a=0;a<360;a+=45) {
+      float r=a*PI/180;
+      gfx->drawLine(ix+(int)(48*cos(r)),iy+(int)(48*sin(r)),
+                    ix+(int)(64*cos(r)),iy+(int)(64*sin(r)),YELLOW);
+      gfx->drawLine(ix+(int)(49*cos(r)),iy+(int)(49*sin(r)),
+                    ix+(int)(63*cos(r)),iy+(int)(63*sin(r)),YELLOW);
     }
+  } else if(wxDesc.indexOf("rain")>=0||wxDesc.indexOf("drizzle")>=0||
+            wxDesc.indexOf("storm")>=0||wxDesc.indexOf("thunder")>=0) {
+    // Cloud + rain
+    gfx->fillEllipse(ix,iy-10,48,28,GRAY);
+    gfx->fillEllipse(ix-20,iy-22,30,20,GRAY);
+    gfx->fillEllipse(ix+16,iy-24,24,18,GRAY);
+    for(int d=-2;d<=2;d++) {
+      gfx->fillRoundRect(ix+d*18-3,iy+24,6,22,3,CYAN);
+    }
+  } else if(wxDesc.indexOf("snow")>=0) {
+    // Cloud + snowflakes
+    gfx->fillEllipse(ix,iy-10,48,28,WHITE);
+    gfx->fillEllipse(ix-20,iy-22,30,20,WHITE);
+    for(int d=-2;d<=2;d++) {
+      gfx->fillCircle(ix+d*22,iy+34,5,WHITE);
+    }
+  } else {
+    // Cloud
+    gfx->fillEllipse(ix,iy,48,28,GRAY);
+    gfx->fillEllipse(ix-20,iy-14,30,20,GRAY);
+    gfx->fillEllipse(ix+16,iy-16,24,18,GRAY);
   }
 
-  hints:
+  // Temp — big, matching reference
+  String ts=wxTemp+" F";
+  gfx->setTextColor(WHITE); gfx->setTextSize(4);
+  gfx->setCursor((W-(int16_t)ts.length()*24)/2, 280);
+  gfx->print(ts);
+
+  // Description
+  String dc=wxDesc; if(dc.length()>0) dc[0]=toupper(dc[0]);
+  centered(dc.c_str(), 336, CYAN, 2);
+
+  drawStatusBar();
   gfx->setTextColor(DIM); gfx->setTextSize(1);
   gfx->setCursor(6,H-14); gfx->print("< clock");
   gfx->setCursor(W-52,H-14); gfx->print("face >");
@@ -571,39 +739,56 @@ void drawWeatherPage() {
 //  Music page
 // ─────────────────────────────────────────────────────────────────────────────
 void drawMusicPage() {
-  gfx->fillScreen(BG);
+  gfx->fillScreen(BLACK);
   drawStatusBar();
-  centered("DIMO Music", 54, PURPLE, 2);
 
-  // Album art
-  gfx->fillRoundRect(84,90,200,160,18,0x1810);
-  gfx->drawRoundRect(84,90,200,160,18,PURPLE);
-  gfx->fillCircle(W/2,170,44,PURPLE);
-  gfx->fillCircle(W/2,170,44,0x300C);
-  gfx->fillCircle(W/2,170,14,BG);
-  gfx->drawCircle(W/2,170,44,0x600C);
+  // Bluetooth icon (top) matching reference bluetooth state
+  int16_t bx=W/2, by=80;
+  gfx->drawLine(bx,by-26,bx,by+26,CYAN);
+  gfx->drawLine(bx,by-26,bx+18,by-10,CYAN);
+  gfx->drawLine(bx+18,by-10,bx-14,by+10,CYAN);
+  gfx->drawLine(bx-14,by-10,bx+18,by+10,CYAN);
+  gfx->drawLine(bx+18,by+10,bx,by+26,CYAN);
+  // thick lines
+  gfx->drawLine(bx+1,by-26,bx+1,by+26,CYAN);
 
-  if (bleConn) {
-    centered("Connected", 268, GREEN, 1);
+  // Small neutral face below
+  int16_t fy=185;
+  gfx->fillCircle(ELX,fy,16,ECYAN3);
+  gfx->fillCircle(ELX,fy,10,ECYAN);
+  gfx->fillCircle(ERX,fy,16,ECYAN3);
+  gfx->fillCircle(ERX,fy,10,ECYAN);
+  gfx->fillRoundRect(MX-16,fy+32,32,5,2,GRAY);
+
+  if(bleConn) {
+    centered("Connected", 240, GREEN, 1);
   } else {
-    centered("Pair: DIMO Remote", 265, DIM, 1);
+    centered("Pair: DIMO Remote", 240, DIM, 1);
   }
 
-  // Controls row
-  int16_t cy=340;
+  // Sound bar visualizer (reference: sound reaction bars)
+  int16_t barY=H-130;
+  uint8_t bars[]={18,30,44,56,44,30,18};
+  for(int i=0;i<7;i++) {
+    uint16_t bc=(i==3)?CYAN:ECYAN2;
+    gfx->fillRoundRect(W/2-54+i*16, barY-bars[i], 10, bars[i], 3, bc);
+  }
+
+  // Controls
+  int16_t cy2=H-56;
   // Prev
-  gfx->fillTriangle(52,cy-22,52,cy+22,30,cy,WHITE);
-  gfx->fillRect(28,cy-22,8,44,WHITE);
+  gfx->fillTriangle(60,cy2-18,60,cy2+18,40,cy2,WHITE);
+  gfx->fillRect(38,cy2-18,6,36,WHITE);
   // Play/Pause
-  if (blePlaying) {
-    gfx->fillRoundRect(W/2-22,cy-24,16,48,3,GREEN);
-    gfx->fillRoundRect(W/2+6, cy-24,16,48,3,GREEN);
+  if(blePlaying) {
+    gfx->fillRoundRect(W/2-18,cy2-20,14,40,2,GREEN);
+    gfx->fillRoundRect(W/2+4, cy2-20,14,40,2,GREEN);
   } else {
-    gfx->fillTriangle(W/2-18,cy-24,W/2-18,cy+24,W/2+22,cy,GREEN);
+    gfx->fillTriangle(W/2-14,cy2-20,W/2-14,cy2+20,W/2+18,cy2,GREEN);
   }
   // Next
-  gfx->fillTriangle(316,cy-22,316,cy+22,338,cy,WHITE);
-  gfx->fillRect(332,cy-22,8,44,WHITE);
+  gfx->fillTriangle(308,cy2-18,308,cy2+18,328,cy2,WHITE);
+  gfx->fillRect(324,cy2-18,6,36,WHITE);
 
   gfx->setTextColor(DIM); gfx->setTextSize(1);
   gfx->setCursor(6,H-14); gfx->print("< face");
@@ -613,10 +798,10 @@ void drawMusicPage() {
 //  Page switcher
 // ─────────────────────────────────────────────────────────────────────────────
 void showPage(Page p) {
-  page = p;
-  if (p==PAGE_FACE) { dirtyBody=true; dirtyEyes=true; dirtyMouth=true; }
+  page=p;
+  if(p==PAGE_FACE) { dirtyAll=true; }
   switch(p) {
-    case PAGE_FACE:    drawFacePage(); break;
+    case PAGE_FACE:    break; // drawn in loop
     case PAGE_CLOCK:   drawClockPage(); break;
     case PAGE_WEATHER: drawWeatherPage(); break;
     case PAGE_MUSIC:   drawMusicPage(); break;
@@ -624,33 +809,23 @@ void showPage(Page p) {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-//  BLE HID setup
+//  BLE HID (media remote)
 // ─────────────────────────────────────────────────────────────────────────────
-#define KEY_PLAY_PAUSE  0xCD
-#define KEY_NEXT        0xB5
-#define KEY_PREV        0xB6
-
-class DimoServerCB : public BLEServerCallbacks {
-  void onConnect(BLEServer*)    override { bleConn=true; if(page==PAGE_MUSIC) drawMusicPage(); }
-  void onDisconnect(BLEServer*) override {
-    bleConn=false;
-    BLEDevice::startAdvertising();
-    if(page==PAGE_MUSIC) drawMusicPage();
-  }
+class DimoBLE : public BLEServerCallbacks {
+  void onConnect(BLEServer*)    override { bleConn=true;  if(page==PAGE_MUSIC) drawMusicPage(); }
+  void onDisconnect(BLEServer*) override { bleConn=false; BLEDevice::startAdvertising(); if(page==PAGE_MUSIC) drawMusicPage(); }
 };
-
 void sendKey(uint8_t k) {
-  if (!bleIn||!bleConn) return;
+  if(!bleIn||!bleConn) return;
   bleIn->setValue(&k,1); bleIn->notify();
   uint8_t r=0; bleIn->setValue(&r,1); bleIn->notify();
 }
-
 void setupBLE() {
   BLEDevice::init("DIMO Remote");
-  BLEServer *srv = BLEDevice::createServer();
-  srv->setCallbacks(new DimoServerCB());
-  bleHID = new BLEHIDDevice(srv);
-  bleIn  = bleHID->inputReport(1);
+  BLEServer *srv=BLEDevice::createServer();
+  srv->setCallbacks(new DimoBLE());
+  bleHID=new BLEHIDDevice(srv);
+  bleIn=bleHID->inputReport(1);
   bleHID->manufacturer()->setValue("DIMO");
   bleHID->pnp(0x02,0x045E,0x0000,0x0110);
   bleHID->hidInfo(0x00,0x01);
@@ -666,41 +841,30 @@ void setupBLE() {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-//  Touch handler
+//  Touch
 // ─────────────────────────────────────────────────────────────────────────────
 void handleTouch() {
   int16_t tx,ty;
-  bool pressed = touchRead(tx,ty);
-
-  if (pressed) {
-    if (!tdDown) {
-      tdDown=true; tdStartX=tx; tdStartY=ty;
-      tdLastX=tx;  tdLastY=ty;
-      tdStartMs=millis(); tdSwiped=false;
-    } else {
-      tdLastX=tx; tdLastY=ty;
-    }
-    if (!tdSwiped) {
-      int16_t dx=tdLastX-tdStartX, dy=tdLastY-tdStartY;
-      if (abs(dx)>55 && abs(dx)>abs(dy)*1.4f) {
+  bool pressed=touchRead(tx,ty);
+  if(pressed) {
+    if(!tdDown) {
+      tdDown=true; tdSX=tx; tdSY=ty; tdLX=tx; tdLY=ty;
+      tdMs=millis(); tdSwiped=false;
+    } else { tdLX=tx; tdLY=ty; }
+    if(!tdSwiped) {
+      int16_t dx=tdLX-tdSX, dy=tdLY-tdSY;
+      if(abs(dx)>55&&abs(dx)>abs(dy)*1.4f) {
         tdSwiped=true;
-        if (dx<0) showPage((Page)((page+1)%4));
-        else      showPage((Page)((page+3)%4));
+        if(dx<0) showPage((Page)((page+1)%4));
+        else     showPage((Page)((page+3)%4));
       }
     }
-    // Music taps
-    if (page==PAGE_MUSIC && !tdSwiped && millis()-tdStartMs<250) {
-      if      (tx<110)      sendKey(KEY_PREV);
-      else if (tx>W-110)    sendKey(KEY_NEXT);
-      else if (abs(tx-W/2)<50) {
-        blePlaying=!blePlaying;
-        sendKey(KEY_PLAY_PAUSE);
-        drawMusicPage();
-      }
+    if(page==PAGE_MUSIC&&!tdSwiped&&millis()-tdMs<300) {
+      if(tx<110)            sendKey(0xB6); // prev
+      else if(tx>W-110)     sendKey(0xB5); // next
+      else if(abs(tx-W/2)<50) { blePlaying=!blePlaying; sendKey(0xCD); drawMusicPage(); }
     }
-  } else {
-    tdDown=false;
-  }
+  } else { tdDown=false; }
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -708,9 +872,9 @@ void handleTouch() {
 // ─────────────────────────────────────────────────────────────────────────────
 void setup() {
   USBSerial.begin(115200);
-  delay(300);
+  delay(200);
 
-  Wire.begin(SDA_PIN, SCL_PIN);
+  Wire.begin(SDA_PIN,SCL_PIN);
   expander.begin(0x20);
   expander.pinMode(4,OUTPUT); expander.pinMode(5,OUTPUT);
   expander.digitalWrite(4,HIGH); expander.digitalWrite(5,HIGH);
@@ -718,21 +882,18 @@ void setup() {
 
   gfx->begin();
   gfx->setBrightness(230);
-  gfx->fillScreen(BG);
+  gfx->fillScreen(BLACK);
 
-  // Boot splash
-  gfx->setTextColor(CYAN); gfx->setTextSize(6);
-  gfx->setCursor((W-6*36)/2, 170); gfx->print("DIMO");
-  gfx->setTextColor(DIM); gfx->setTextSize(1);
-  centered("robot companion", 248, DIM, 1);
-  delay(1400);
+  // Boot animation
+  bootAnimation();
 
   // WiFi
   WiFi.onEvent([](WiFiEvent_t ev, WiFiEventInfo_t info){
-    if (ev==ARDUINO_EVENT_WIFI_STA_GOT_IP) {
+    if(ev==ARDUINO_EVENT_WIFI_STA_GOT_IP) {
       wifiOk=true;
       configTzTime(TZ_INFO,"pool.ntp.org","time.nist.gov");
-    } else if (ev==ARDUINO_EVENT_WIFI_STA_DISCONNECTED) {
+      USBSerial.println("WiFi OK");
+    } else if(ev==ARDUINO_EVENT_WIFI_STA_DISCONNECTED) {
       wifiOk=false;
     }
   });
@@ -741,10 +902,15 @@ void setup() {
   WiFi.setSleep(false);
   WiFi.begin(WIFI_SSID,WIFI_PASS);
 
+  // WiFi connecting animation
+  wifiAnimation();
+
   setupBLE();
 
-  dirtyBody=true;
-  showPage(PAGE_FACE);
+  dirtyAll=true;
+  dirtyEyes=true;
+  dirtyMouth=true;
+  gfx->fillScreen(BLACK);
   USBSerial.println("DIMO ready");
 }
 
@@ -752,89 +918,77 @@ void setup() {
 //  Loop
 // ─────────────────────────────────────────────────────────────────────────────
 void loop() {
-  uint32_t now = millis();
+  uint32_t now=millis();
 
   handleTouch();
 
-  // ── Face page animations (partial redraws only) ──────────────────────────
-  if (page==PAGE_FACE) {
+  // ── Face page ──────────────────────────────────────────────────────────────
+  if(page==PAGE_FACE) {
 
-    // Blink logic
-    if (!blinking && now-lastBlink > (uint32_t)random(3500,7000)) {
+    // Full redraw when mood changed
+    if(mood!=prevMood) {
+      prevMood=mood;
+      gfx->fillScreen(BLACK);
+      dirtyEyes=true; dirtyMouth=true;
+    }
+
+    // Blink
+    if(!blinking&&now-lastBlink>(uint32_t)random(3500,7500)) {
       blinking=true; blinkStart=now;
     }
-    if (blinking && now-blinkStart>130) {
-      blinking=false; lastBlink=now;
-    }
-    if (blinking!=prevBlink) {
-      prevBlink=blinking;
-      dirtyEyes=true;
-    }
+    if(blinking&&now-blinkStart>140) { blinking=false; lastBlink=now; }
+    if(blinking!=prevBlink) { prevBlink=blinking; dirtyEyes=true; }
 
     // Eye wander
-    if (now-lastEyeMove>(uint32_t)random(2500,6000)) {
+    if(now-lastEyeMove>(uint32_t)random(2500,6000)) {
       lastEyeMove=now;
-      eyeOX=random(-7,8); eyeOY=random(-4,5);
-      if (eyeOX!=prevEyeOX) { prevEyeOX=eyeOX; dirtyEyes=true; }
+      int8_t nx=random(-7,8), ny=random(-4,5);
+      if(nx!=eyeOX||ny!=eyeOY) { eyeOX=nx; eyeOY=ny; dirtyEyes=true; }
     }
 
-    // Auto mood
-    if (now-lastMoodChange>moodDuration) {
-      lastMoodChange=now;
-      moodDuration=random(7000,15000);
-      Mood m[]={MOOD_HAPPY,MOOD_EXCITED,MOOD_CUTE,MOOD_THINKING,
-                MOOD_SLEEPY,MOOD_SAD,MOOD_SURPRISED,MOOD_LOVE,MOOD_PARTY};
-      Mood next=m[random(0,9)];
-      if (next!=mood) {
-        mood=next;
-        dirtyEyes=true;
-        dirtyMouth=true;
-      }
+    // Auto mood cycle
+    if(now-lastMoodChange>moodDur) {
+      lastMoodChange=now; moodDur=random(8000,18000);
+      Mood all[]={MOOD_HAPPY,MOOD_EXCITED,MOOD_CUTE,MOOD_THINKING,
+                  MOOD_SLEEPY,MOOD_SAD,MOOD_SURPRISED,MOOD_LOVE,MOOD_PARTY};
+      Mood next=all[random(0,9)];
+      if(next!=mood) { mood=next; dirtyEyes=true; dirtyMouth=true; }
     }
 
-    drawFacePage();
+    if(dirtyEyes)  { dirtyEyes=false;  drawEyes(); }
+    if(dirtyMouth) { dirtyMouth=false; drawMouth(); }
 
     // Status bar once per second
-    static uint32_t lastStatus=0;
-    if (now-lastStatus>1000) { lastStatus=now; dirtyStatus=true; }
-    if (dirtyStatus) { dirtyStatus=false; drawStatusBar(); }
+    static uint32_t lastStat=0;
+    if(now-lastStat>1000) { lastStat=now; drawStatusBar(); }
   }
 
-  // ── Clock page: refresh every second ─────────────────────────────────────
-  static uint32_t lastClkDraw=0;
-  if (page==PAGE_CLOCK && now-lastClkDraw>1000) {
-    lastClkDraw=now; drawClockPage();
-  }
+  // ── Clock page ────────────────────────────────────────────────────────────
+  static uint32_t lastClk=0;
+  if(page==PAGE_CLOCK&&now-lastClk>1000) { lastClk=now; drawClockPage(); }
 
   // ── WiFi reconnect ────────────────────────────────────────────────────────
   static uint32_t lastWifiTry=0;
-  if (!wifiOk && now-lastWifiTry>12000) {
-    lastWifiTry=now;
-    WiFi.begin(WIFI_SSID,WIFI_PASS);
+  if(!wifiOk&&now-lastWifiTry>12000) {
+    lastWifiTry=now; WiFi.begin(WIFI_SSID,WIFI_PASS);
   }
 
-  // ── Weather fetch ─────────────────────────────────────────────────────────
-  if (wifiOk && !wxFetched) {
+  // ── Weather fetch (on connect, then every 10 min) ─────────────────────────
+  if(wifiOk&&!wxFetched) {
     wxFetched=true; lastWxFetch=now;
-    HTTPClient http;
-    http.setTimeout(5000);
-    if (http.begin(OWM_URL)) {
-      if (http.GET()==200) {
-        String b=http.getString();
-        float t=jsonF(b,"temp");
-        String d=jsonS(b,"description");
-        if (!isnan(t)&&d.length()>0) {
-          wxTemp=String((int)round(t)); wxDesc=d; wxOk=true;
-        }
+    HTTPClient http; http.setTimeout(5000);
+    if(http.begin(OWM_URL)&&http.GET()==200) {
+      String b=http.getString();
+      float tmp=jsonF(b,"temp");
+      String dsc=jsonS(b,"description");
+      if(!isnan(tmp)&&dsc.length()>0) {
+        wxTemp=String((int)round(tmp)); wxDesc=dsc; wxOk=true;
       }
-      http.end();
     }
-    if (page==PAGE_WEATHER) drawWeatherPage();
-    else drawStatusBar();
+    http.end();
+    if(page==PAGE_WEATHER) drawWeatherPage(); else drawStatusBar();
   }
-  if (wifiOk && now-lastWxFetch>600000) {
-    lastWxFetch=now; wxFetched=false;
-  }
+  if(wifiOk&&now-lastWxFetch>600000) { lastWxFetch=now; wxFetched=false; }
 
-  delay(20);
+  delay(18);
 }
