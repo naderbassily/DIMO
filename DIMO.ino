@@ -153,34 +153,23 @@ bool touchRead(int16_t &x, int16_t &y) {
 void drawEyeFull(int16_t cx, int16_t cy) {
   int16_t R = EYE_R;
 
-  // Faint outer glow (AMOLED: just 1px ring to add depth)
-  gfx->drawCircle(cx, cy, R+2, 0x0318);
-  gfx->drawCircle(cx, cy, R+1, 0x0529);
-
-  // White sclera
+  // White sclera — pure white on pure black = maximum AMOLED pop
   gfx->fillCircle(cx, cy, R, WHITE);
 
-  // Iris (dark blue-gray ring)
-  gfx->fillCircle(cx, cy, 28, IRIS_COL);
+  // Iris positioned LOWER than center → more white showing at top = cute/innocent
+  int16_t iy = cy + 7;
+  gfx->fillCircle(cx, iy, 26, 0x10A3);   // dark blue-gray iris
+  gfx->fillCircle(cx, iy, 18, 0x0861);   // deeper inner iris
+  gfx->fillCircle(cx, iy, 10, BLACK);    // pupil
 
-  // Inner iris (slightly lighter for depth)
-  gfx->fillCircle(cx, cy, 21, 0x2145);
+  // Large primary shine — top right, prominent
+  gfx->fillCircle(cx+14, cy-14, 9, WHITE);
 
-  // Pupil
-  gfx->fillCircle(cx, cy, 13, PUPIL_COL);
+  // Small secondary shine — just below primary
+  gfx->fillCircle(cx+8,  cy-4,  4, 0xEF7B);
 
-  // Primary shine — top right
-  gfx->fillCircle(cx+13, cy-13, 8, SHINE_COL);
-
-  // Secondary shine — small, bottom left
-  gfx->fillCircle(cx-9,  cy+10, 4, SHINE2);
-
-  // Top eyelash line (curved)
-  for (int x=-(R-1); x<=(R-1); x++) {
-    float curve = (float)(x*x) * 2.5f / ((R-1)*(R-1));
-    gfx->drawPixel(cx+x, cy-R-1+(int16_t)curve, LASH_COL);
-    gfx->drawPixel(cx+x, cy-R  +(int16_t)curve, LASH_COL);
-  }
+  // Top lash — flat horizontal bar, NOT curved (curved = sad)
+  gfx->fillRoundRect(cx-R+2, cy-R-1, (R-2)*2, 5, 2, LASH_COL);
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -193,16 +182,16 @@ void blinkOverlay(int16_t cx, int16_t cy, int step) {
   // step 3: restore (redraw eye)
   int16_t R = EYE_R;
   if (step == 1) {
-    // Cover top 55% with black
-    gfx->fillRect(cx-R-2, cy-R-2, (R+2)*2, R+4, BLACK);
-    // Soft eyelid edge
-    gfx->fillRoundRect(cx-R, cy-3, R*2, 6, 3, LASH_COL);
+    // Eyelid comes DOWN from top — covers top 60%
+    gfx->fillRect(cx-R-1, cy-R-2, (R+1)*2, (int16_t)(R*1.2f), BLACK);
+    // Eyelid bottom edge
+    gfx->fillRoundRect(cx-R+2, cy-R-2+(int16_t)(R*1.2f)-4, (R-2)*2, 5, 2, LASH_COL);
   } else if (step == 2) {
-    // Full close — black circle + closed line
-    gfx->fillCircle(cx, cy, R+2, BLACK);
-    gfx->fillRoundRect(cx-R+4, cy-4, (R-4)*2, 8, 4, LASH_COL);
+    // Fully closed — whole eye black + thin line
+    gfx->fillCircle(cx, cy, R+1, BLACK);
+    gfx->fillRoundRect(cx-R+6, cy-3, (R-6)*2, 7, 3, LASH_COL);
   } else {
-    // Restore full eye
+    // Open — restore eye
     drawEyeFull(cx, cy);
   }
 }
