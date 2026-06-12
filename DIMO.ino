@@ -153,28 +153,24 @@ bool touchRead(int16_t &x, int16_t &y) {
 void drawEyeFull(int16_t cx, int16_t cy) {
   int16_t R = EYE_R; // 44
 
-  // Outer soft glow — AMOLED depth against pure black
-  gfx->fillCircle(cx, cy, R+8, 0x020C);
-  gfx->fillCircle(cx, cy, R+4, 0x0318);
-  gfx->fillCircle(cx, cy, R+1, 0x052A);
+  // Outer glow halos — AMOLED magic: dark cyan fading into pure black
+  gfx->fillCircle(cx, cy, R+16, 0x0106);
+  gfx->fillCircle(cx, cy, R+11, 0x020C);
+  gfx->fillCircle(cx, cy, R+7,  0x031A);
+  gfx->fillCircle(cx, cy, R+3,  0x052A);
 
-  // White sclera
-  gfx->fillCircle(cx, cy, R, WHITE);
+  // Glowing cyan orb — bright in center, darker at edge (EMO style)
+  gfx->fillCircle(cx, cy, R,    0x035F); // dark edge
+  gfx->fillCircle(cx, cy, R-8,  0x05BF); // mid cyan
+  gfx->fillCircle(cx, cy, R-16, 0x07EF); // bright cyan
+  gfx->fillCircle(cx, cy, R-24, 0x07FF); // pure cyan
+  gfx->fillCircle(cx, cy, R-32, 0xAFFF); // near-white hot center
 
-  // Cyan-teal iris (striking on AMOLED, matches EMO style)
-  gfx->fillCircle(cx, cy, 30, 0x075F); // outer iris (deep cyan-blue)
-  gfx->fillCircle(cx, cy, 22, 0x07BF); // inner iris (bright cyan)
-  gfx->fillCircle(cx, cy, 14, 0x03DF); // core iris (rich cyan)
-
-  // Pupil
-  gfx->fillCircle(cx, cy, 8, BLACK);
-
-  // Large shine — top right (makes eye look alive)
-  gfx->fillCircle(cx+14, cy-14, 11, WHITE);
-  gfx->fillCircle(cx+14, cy-14,  6, WHITE); // bright center
-
-  // Small secondary shine
-  gfx->fillCircle(cx-8, cy-6, 5, 0xEFFF);
+  // Realistic touches: dark pupil ring + white shine
+  gfx->fillCircle(cx,    cy,     10, 0x018C); // dark pupil
+  gfx->fillCircle(cx+12, cy-12,  9,  WHITE);  // main shine
+  gfx->fillCircle(cx+12, cy-12,  5,  WHITE);
+  gfx->fillCircle(cx-6,  cy+8,   4,  0x9FFF); // soft secondary shine
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -205,7 +201,9 @@ void blinkOverlay(int16_t cx, int16_t cy, int step) {
 //  CHEEKS — drawn once, never redrawn
 // ─────────────────────────────────────────────────────────────────────────────
 void drawCheeks() {
-  // No cheeks — clean EMO style
+  // Explicitly erase cheek zones — no cheeks on DIMO
+  gfx->fillRect(CK_LX-30, CK_Y-30, 60, 60, BLACK);
+  gfx->fillRect(CK_RX-30, CK_Y-30, 60, 60, BLACK);
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -320,12 +318,6 @@ void bootAnimation() {
 
   // 5. Ready — face with sparkle burst
   drawFacePage();
-  // extra sparkle burst
-  for(int i=0;i<8;i++){
-    float a=i*PI/4;
-    int16_t sx=EL_X+(int16_t)(60*cos(a)), sy=EY_Y+(int16_t)(60*sin(a));
-    gfx->fillCircle(sx,sy,3,i%2?0xB5F6:YELLOW);
-  }
   delay(600);
 }
 
