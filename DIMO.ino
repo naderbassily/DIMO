@@ -145,7 +145,9 @@ bool touchRead(int16_t &x, int16_t &y) {
               yh=Wire.read(),yl=Wire.read();
   Wire.read();
   if ((td&0x0F)==0) return false;
-  if ((xh&0xC0)==0x80) return false;
+  // 0x00=press, 0x80=contact/move — both valid. Reject 0x40=lift, 0xC0=no event
+  uint8_t evt = xh & 0xC0;
+  if (evt == 0x40 || evt == 0xC0) return false;
   x=((xh&0x0F)<<8)|xl;
   y=((yh&0x0F)<<8)|yl;
   return true;
