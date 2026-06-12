@@ -92,7 +92,8 @@ uint32_t gazeTimer = 0;
 uint32_t nextGaze  = 4000;
 
 // ── WiFi / weather ────────────────────────────────────────────────────────────
-bool     wifiOk   = false;
+bool     wifiOk         = false;
+bool     wifiConnecting = false;
 String   wxTemp   = "--";
 String   wxDesc   = "";
 bool     wxOk     = false;
@@ -612,8 +613,9 @@ void drawSettingsPage() {
   gfx->drawFastHLine(20, 76, SCR_W-40, DIM);
 
   // WiFi row
-  String wfSub = wifiOk ? String("Connected: ") + WIFI_SSID : (WiFi.status()==WL_NO_SSID_AVAIL ? "Connecting..." : "Disconnected");
-  drawSettingsRow(SET_ROW_Y1, "WiFi", wfSub.c_str(), wifiOk, 0x02DF);
+  String wfSub = wifiOk ? String("Connected: ")+WIFI_SSID
+                        : (wifiConnecting ? "Connecting..." : "Off");
+  drawSettingsRow(SET_ROW_Y1, "WiFi", wfSub.c_str(), wifiOk||wifiConnecting, 0x02DF);
 
   // Bluetooth row
   const char* btSub = bleConn ? "Device connected" : (bleEnabled ? "Visible as DIMO" : "Off");
@@ -629,8 +631,11 @@ void handleSettingsTap(int16_t y) {
   if (y >= SET_ROW_Y1 && y < SET_ROW_Y1+SET_ROW_H) {
     // WiFi toggle
     if (wifiOk) {
-      WiFi.disconnect(); wifiOk=false; wxOk=false; wxFetched=false;
+      WiFi.disconnect(); wifiOk=false; wifiConnecting=false; wxOk=false; wxFetched=false;
+    } else if (wifiConnecting) {
+      WiFi.disconnect(); wifiConnecting=false; // cancel attempt
     } else {
+      wifiConnecting=true;
       WiFi.begin(WIFI_SSID, WIFI_PASS);
     }
     drawSettingsPage();
@@ -838,8 +843,8 @@ void handleTouch(){
     }
   } else {
     if(tdDown&&!tdSwiped){
-      if(page==PAGE_HOME)     handleHomeTap(tdLX,tdLY);
-      if(page==PAGE_SETTINGS) handleSettingsTap(tdLY);
+      if(page==PAGE_HOME)          handleHomeTap(tdLX,tdLY);
+      else if(page==PAGE_SETTINGS) handleSettingsTap(tdLY);
     }
     tdDown=false;
   }
@@ -865,8 +870,8 @@ void setup(){
   bootAnimation();
 
   WiFi.onEvent([](WiFiEvent_t ev,WiFiEventInfo_t info){
-    if(ev==ARDUINO_EVENT_WIFI_STA_GOT_IP){wifiOk=true;configTzTime(TZ_INFO,"pool.ntp.org","time.nist.gov");}
-    else if(ev==ARDUINO_EVENT_WIFI_STA_DISCONNECTED){wifiOk=false;}
+    if(ev==ARDUINO_EVENT_WIFI_STA_GOT_IP){wifiOk=true;wifiConnecting=false;configTzTime(TZ_INFO,"pool.ntp.org","time.nist.gov");}
+    else if(ev==ARDUINO_EVENT_WIFI_STA_DISCONNECTED){wifiOk=false;wifiConnecting=false;}
   });
   WiFi.mode(WIFI_STA);
   WiFi.persistent(false);
