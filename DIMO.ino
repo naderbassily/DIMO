@@ -151,24 +151,30 @@ bool touchRead(int16_t &x, int16_t &y) {
 //  Round white eye, dark iris, pupil, two shine dots — exactly like reference
 // ─────────────────────────────────────────────────────────────────────────────
 void drawEyeFull(int16_t cx, int16_t cy) {
-  int16_t R = EYE_R;
+  int16_t R = EYE_R; // 44
 
-  // White sclera — pure white on pure black = maximum AMOLED pop
+  // Outer soft glow — AMOLED depth against pure black
+  gfx->fillCircle(cx, cy, R+8, 0x020C);
+  gfx->fillCircle(cx, cy, R+4, 0x0318);
+  gfx->fillCircle(cx, cy, R+1, 0x052A);
+
+  // White sclera
   gfx->fillCircle(cx, cy, R, WHITE);
 
-  // Iris positioned LOWER than center → more white showing at top = cute/innocent
-  int16_t iy = cy + 7;
-  gfx->fillCircle(cx, iy, 26, 0x10A3);   // dark blue-gray iris
-  gfx->fillCircle(cx, iy, 18, 0x0861);   // deeper inner iris
-  gfx->fillCircle(cx, iy, 10, BLACK);    // pupil
+  // Cyan-teal iris (striking on AMOLED, matches EMO style)
+  gfx->fillCircle(cx, cy, 30, 0x075F); // outer iris (deep cyan-blue)
+  gfx->fillCircle(cx, cy, 22, 0x07BF); // inner iris (bright cyan)
+  gfx->fillCircle(cx, cy, 14, 0x03DF); // core iris (rich cyan)
 
-  // Large primary shine — top right, prominent
-  gfx->fillCircle(cx+14, cy-14, 9, WHITE);
+  // Pupil
+  gfx->fillCircle(cx, cy, 8, BLACK);
 
-  // Small secondary shine — just below primary
-  gfx->fillCircle(cx+8,  cy-4,  4, 0xEF7B);
+  // Large shine — top right (makes eye look alive)
+  gfx->fillCircle(cx+14, cy-14, 11, WHITE);
+  gfx->fillCircle(cx+14, cy-14,  6, WHITE); // bright center
 
-  // No eyebrow/lash bar — natural circle edge is enough
+  // Small secondary shine
+  gfx->fillCircle(cx-8, cy-6, 5, 0xEFFF);
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -199,28 +205,20 @@ void blinkOverlay(int16_t cx, int16_t cy, int step) {
 //  CHEEKS — drawn once, never redrawn
 // ─────────────────────────────────────────────────────────────────────────────
 void drawCheeks() {
-  // Soft blush — gentle pink, not hot magenta
-  gfx->fillCircle(CK_LX, CK_Y, 22, 0xE00C); // very faint outer
-  gfx->fillCircle(CK_LX, CK_Y, 14, 0xF014); // soft pink mid
-  gfx->fillCircle(CK_LX, CK_Y,  7, 0xFB56); // light pink center
-  gfx->fillCircle(CK_RX, CK_Y, 22, 0xE00C);
-  gfx->fillCircle(CK_RX, CK_Y, 14, 0xF014);
-  gfx->fillCircle(CK_RX, CK_Y,  7, 0xFB56);
+  // No cheeks — clean EMO style
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
 //  MOUTH — small U smile, drawn once
 // ─────────────────────────────────────────────────────────────────────────────
 void drawMouth() {
-  // U-shape smile: center is LOW (large y), edges are HIGH (small y)
-  // depth=16 means centre of arc is 16px below edges
-  const int16_t r=30, depth=16;
+  // Small cyan U-smile — matches EMO reference, matches eye color
+  const int16_t r=26, depth=13;
   for (int x=-r; x<=r; x++) {
     int16_t y = depth - (int16_t)((float)x*x * depth / (r*r));
-    uint16_t col = 0xD6DB; // light gray — visible but subtle
-    gfx->drawPixel(MX+x, MY+y,   col);
-    gfx->drawPixel(MX+x, MY+y+1, col);
-    gfx->drawPixel(MX+x, MY+y+2, col);
+    gfx->drawPixel(MX+x, MY+y,   0x07BF);
+    gfx->drawPixel(MX+x, MY+y+1, 0x07BF);
+    gfx->drawPixel(MX+x, MY+y+2, 0x075F);
   }
 }
 
