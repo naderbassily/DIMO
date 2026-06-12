@@ -152,25 +152,11 @@ bool touchRead(int16_t &x, int16_t &y) {
 // ─────────────────────────────────────────────────────────────────────────────
 void drawEyeFull(int16_t cx, int16_t cy) {
   int16_t R = EYE_R; // 44
-
-  // Outer glow halos — AMOLED magic: dark cyan fading into pure black
-  gfx->fillCircle(cx, cy, R+16, 0x0106);
-  gfx->fillCircle(cx, cy, R+11, 0x020C);
-  gfx->fillCircle(cx, cy, R+7,  0x031A);
-  gfx->fillCircle(cx, cy, R+3,  0x052A);
-
-  // Glowing cyan orb — bright in center, darker at edge (EMO style)
-  gfx->fillCircle(cx, cy, R,    0x035F); // dark edge
-  gfx->fillCircle(cx, cy, R-8,  0x05BF); // mid cyan
-  gfx->fillCircle(cx, cy, R-16, 0x07EF); // bright cyan
-  gfx->fillCircle(cx, cy, R-24, 0x07FF); // pure cyan
-  gfx->fillCircle(cx, cy, R-32, 0xAFFF); // near-white hot center
-
-  // Realistic touches: dark pupil ring + white shine
-  gfx->fillCircle(cx,    cy,     10, 0x018C); // dark pupil
-  gfx->fillCircle(cx+12, cy-12,  9,  WHITE);  // main shine
-  gfx->fillCircle(cx+12, cy-12,  5,  WHITE);
-  gfx->fillCircle(cx-6,  cy+8,   4,  0x9FFF); // soft secondary shine
+  gfx->fillCircle(cx, cy, R,    WHITE);     // white sclera
+  gfx->fillCircle(cx, cy, R-12, IRIS_COL); // dark blue iris
+  gfx->fillCircle(cx, cy, R-22, BLACK);    // pupil
+  gfx->fillCircle(cx+13, cy-13, 8, WHITE); // main shine
+  gfx->fillCircle(cx-8,  cy+10, 4, 0xCF1B); // soft secondary shine
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
