@@ -198,38 +198,33 @@ void drawCheeks() {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-//  MOUTH — small U smile, drawn once
+//  MOUTH — thick U smile
 // ─────────────────────────────────────────────────────────────────────────────
 void drawMouth() {
-  const int16_t r=30, depth=14;
+  const int16_t r=34, depth=16;
   for (int x=-r; x<=r; x++) {
     int16_t y = depth - (int16_t)((float)x*x * depth / (r*r));
-    gfx->drawPixel(MX+x, MY+y,   IRIS_COL);
-    gfx->drawPixel(MX+x, MY+y+1, IRIS_COL);
-    gfx->drawPixel(MX+x, MY+y+2, IRIS_COL);
-    gfx->drawPixel(MX+x, MY+y+3, IRIS_COL);
-    gfx->drawPixel(MX+x, MY+y+4, LASH_COL);
+    gfx->drawPixel(MX+x, MY+y,   WHITE);
+    gfx->drawPixel(MX+x, MY+y+1, WHITE);
+    gfx->drawPixel(MX+x, MY+y+2, WHITE);
+    gfx->drawPixel(MX+x, MY+y+3, WHITE);
+    gfx->drawPixel(MX+x, MY+y+4, WHITE);
+    gfx->drawPixel(MX+x, MY+y+5, GRAY);
   }
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-//  SPARKLE DOTS — small, drawn/erased without clearing eye region
+//  EYEBROWS — slight outward tilt, friendly expression
 // ─────────────────────────────────────────────────────────────────────────────
-// Positions: above-left and above-right of eyes
-int16_t spkX[] = {EL_X-38, EL_X-20, ER_X+20, ER_X+38};
-int16_t spkY[] = {EY_Y-66, EY_Y-52, EY_Y-52, EY_Y-66};
-bool    spkOn  = true;
-
-void drawSparkles(bool on) {
-  for (int i=0; i<4; i++) {
-    uint16_t col = on ? (i%2==0 ? 0xB5F6 : 0x8C10) : BLACK;
-    int16_t  r   = on ? (i%2==0 ? 4 : 3) : 6; // erase slightly larger
-    if (!on) {
-      gfx->fillRect(spkX[i]-r, spkY[i]-r, r*2+1, r*2+1, BLACK);
-    } else {
-      gfx->fillCircle(spkX[i], spkY[i], 2, col);
-      gfx->drawFastHLine(spkX[i]-5, spkY[i], 11, col);
-      gfx->drawFastVLine(spkX[i], spkY[i]-5, 11, col);
+void drawEyebrows() {
+  int16_t by = EY_Y - EYE_R - 16;
+  for (int x = -28; x <= 28; x++) {
+    // Inner end slightly lower, outer end slightly higher = relaxed/friendly
+    int16_t tiltL =  (int16_t)(x * 5 / 28); // left brow
+    int16_t tiltR = -(int16_t)(x * 5 / 28); // right brow (mirrored)
+    for (int t = 0; t < 5; t++) {
+      gfx->drawPixel(EL_X + x, by + tiltL + t, WHITE);
+      gfx->drawPixel(ER_X + x, by + tiltR + t, WHITE);
     }
   }
 }
@@ -239,11 +234,11 @@ void drawSparkles(bool on) {
 // ─────────────────────────────────────────────────────────────────────────────
 void drawFacePage() {
   gfx->fillScreen(BLACK);
+  drawEyebrows();
   drawEyeFull(EL_X, EY_Y, gazeDir);
   drawEyeFull(ER_X, EY_Y, gazeDir);
   drawCheeks();
   drawMouth();
-  drawSparkles(true);
 }
 
 void updateGaze(int8_t newDir) {
@@ -629,14 +624,6 @@ void loop(){
 
   // ── FACE: only blink and sparkle — no other redraws ───────────────────────
   if(page==PAGE_FACE){
-
-    // Sparkle toggle every 800ms — tiny pixels only
-    static uint32_t lastSpk=0;
-    if(now-lastSpk>800){
-      lastSpk=now;
-      spkOn=!spkOn;
-      drawSparkles(spkOn);
-    }
 
     // Gaze animation — look left, center, right
     if (blinkState == BLINK_OPEN && now - gazeTimer > nextGaze) {
