@@ -1,0 +1,9 @@
+build/
+*.bin
+*.elf
+*.map
+*.hex
+*.uf2
+*.log
+secrets.h
+.DS_Store

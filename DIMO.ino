@@ -24,8 +24,28 @@
 #include <Adafruit_XCA9554.h>
 #include "Arduino_GFX_Library.h"
 #include "HWCDC.h"
+#if __has_include("secrets.h")
+#include "secrets.h"
+#endif
+// Font files must come after Arduino_GFX_Library.h (need GFXfont/GFXglyph types)
+#include "FreeSans9pt7b.h"
+#include "FreeSans12pt7b.h"
+#include "FreeSansBold12pt7b.h"
+#include "FreeSansBold18pt7b.h"
+#include "FreeSansBold24pt7b.h"
+// Font helpers — always use size 1 with custom fonts, never setTextSize(n>1)
+#define F9   (&FreeSans9pt7b)
+#define F12  (&FreeSans12pt7b)
+#define FB12 (&FreeSansBold12pt7b)
+#define FB18 (&FreeSansBold18pt7b)
+#define FB24 (&FreeSansBold24pt7b)
+#define FDEF nullptr   // default 5x7 font (for status bar tiny text only)
 
 HWCDC USBSerial;
+
+// ── Version ──────────────────────────────────────────────────────────────────
+#define DIMO_VERSION "0.18.0"
+#define DIMO_VERSION_NAME "Touch AMOLED baseline"
 
 // ── Hardware ──────────────────────────────────────────────────────────────────
 #define SDA_PIN  8
@@ -38,11 +58,19 @@ Arduino_DataBus *bus = new Arduino_ESP32QSPI(5,0,1,2,3,4);
 Arduino_SH8601  *gfx = new Arduino_SH8601(bus, GFX_NOT_DEFINED, 0, SCR_W, SCR_H);
 
 // ── Credentials ───────────────────────────────────────────────────────────────
-char wifiSSID[64] = "Bassily - IoT";        // overwritten from NVS on boot
-char wifiPass[64] = "@Bassily199711412";
-const char *OWM_URL = "http://api.openweathermap.org/data/2.5/weather"
-                      "?q=Cumming,GA,US&units=imperial"
-                      "&appid=898dec73df9c4e262a862baa0c11028f";
+#ifndef DIMO_DEFAULT_WIFI_SSID
+#define DIMO_DEFAULT_WIFI_SSID ""
+#endif
+#ifndef DIMO_DEFAULT_WIFI_PASS
+#define DIMO_DEFAULT_WIFI_PASS ""
+#endif
+#ifndef DIMO_OPENWEATHER_URL
+#define DIMO_OPENWEATHER_URL "http://api.openweathermap.org/data/2.5/weather?q=Cumming,GA,US&units=imperial&appid=PUT_YOUR_OPENWEATHER_KEY_HERE"
+#endif
+
+char wifiSSID[64] = DIMO_DEFAULT_WIFI_SSID;        // overwritten from NVS on boot
+char wifiPass[64] = DIMO_DEFAULT_WIFI_PASS;
+const char *OWM_URL = DIMO_OPENWEATHER_URL;
 const char *TZ_INFO = "EST5EDT,M3.2.0/2,M11.1.0/2";
 
 // ── WiFi portal ───────────────────────────────────────────────────────────────
@@ -123,11 +151,15 @@ bool              blePlaying = false;
 // ─────────────────────────────────────────────────────────────────────────────
 //  Helpers
 // ─────────────────────────────────────────────────────────────────────────────
-void centered(const char *s, int16_t y, uint16_t col, uint8_t sz=1) {
-  gfx->setTextSize(sz);
-  gfx->setTextColor(col);
-  gfx->setCursor((SCR_W - (int16_t)(strlen(s)*6*sz)) / 2, y);
+// Print centred on x-axis. With custom fonts y = baseline; with default font y = top.
+void centered(const char *s, int16_t y, uint16_t col,
+              const GFXfont *font = FDEF, uint8_t sz = 1) {
+  gfx->setFont(font); gfx->setTextSize(sz); gfx->setTextColor(col);
+  int16_t x1,y1; uint16_t w,h;
+  gfx->getTextBounds(s, 0, y, &x1, &y1, &w, &h);
+  gfx->setCursor((SCR_W - (int16_t)w) / 2, y);
   gfx->print(s);
+  gfx->setFont(FDEF); // always reset
 }
 float  jsonF(const String &b, const char *k) {
   String key=String("\"")+k+"\":"; int i=b.indexOf(key);
@@ -316,11 +348,13 @@ void bootAnimation() {
 
   // 4. DIMO name
   gfx->fillScreen(BLACK);
-  gfx->setTextColor(WHITE); gfx->setTextSize(6);
-  gfx->setCursor((SCR_W-6*36)/2, SCR_H/2-50);
+  gfx->setFont(FB24); gfx->setTextColor(WHITE); gfx->setTextSize(1);
+  int16_t bx1,by1; uint16_t bw,bh;
+  gfx->getTextBounds("DIMO", 0, SCR_H/2-20, &bx1,&by1,&bw,&bh);
+  gfx->setCursor((SCR_W-(int16_t)bw)/2, SCR_H/2-20);
   gfx->print("DIMO");
-  gfx->setTextColor(DIM); gfx->setTextSize(1);
-  centered("your desktop friend", SCR_H/2+28, DIM, 1);
+  gfx->setFont(FDEF);
+  centered("your desktop friend", SCR_H/2+32, DIM, F9);
   delay(900);
 
   // 5. Ready — face with sparkle burst
@@ -368,7 +402,7 @@ void wifiAnimation() {
 
   // Connected — full face
   drawFacePage();
-  centered("Connected!", SCR_H-44, GREEN, 1);
+  centered("Connected!", SCR_H-40, GREEN, FB12);
   delay(700);
 }
 
@@ -381,10 +415,10 @@ void drawClockPage() {
 
   struct tm t;
   if (!getLocalTime(&t,200)) {
-    centered("Syncing...",SCR_H/2,DIM,2);
-    gfx->setTextColor(DIM);gfx->setTextSize(1);
-    gfx->setCursor(6,SCR_H-14);gfx->print("< face");
-    gfx->setCursor(SCR_W-76,SCR_H-14);gfx->print("weather >");
+    centered("Syncing...", SCR_H/2, DIM, FB18);
+    gfx->setTextColor(DIM); gfx->setTextSize(1);
+    gfx->setCursor(6,SCR_H-14); gfx->print("< face");
+    gfx->setCursor(SCR_W-76,SCR_H-14); gfx->print("weather >");
     return;
   }
 
@@ -405,12 +439,8 @@ void drawClockPage() {
   gfx->setTextSize(3);gfx->setCursor(ER_X+54,fy-70);gfx->print("Z");
 
   // Big time
-  gfx->setTextColor(WHITE);gfx->setTextSize(5);
-  gfx->setCursor((SCR_W-(int16_t)strlen(tBuf)*30)/2,150);
-  gfx->print(tBuf);
-
-  gfx->setTextColor(CYAN);gfx->setTextSize(2);
-  centered(dBuf,228,CYAN,2);
+  centered(tBuf, 210, WHITE, FB24);
+  centered(dBuf, 248, CYAN, F12);
 
   // Seconds ring
   gfx->drawCircle(SCR_W/2,336,48,DIM);
@@ -484,7 +514,7 @@ void drawDeadFace() {
     }
   }
 
-  centered("No WiFi", MY+60, DIM, 1);
+  centered("No WiFi", MY+64, DIM, F12);
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -495,20 +525,18 @@ void drawWeatherPage() {
 
   gfx->fillScreen(BLACK);
   drawStatusBar();
-  centered("Cumming, GA",44,DIM,1);
+  centered("Cumming, GA", 56, DIM, F9);
 
-  if (!wxOk)   { centered("Loading...",SCR_H/2,DIM,2); goto hints; }
-  if (!wxOk)   { centered("Loading...",SCR_H/2,DIM,2); goto hints; }
+  if (!wxOk)   { centered("Loading...", SCR_H/2, DIM, FB18); goto hints; }
 
   {
     // Big temp
-    String ts=wxTemp+" F";
-    gfx->setTextColor(WHITE);gfx->setTextSize(5);
-    gfx->setCursor((SCR_W-(int16_t)ts.length()*30)/2,80);gfx->print(ts);
+    String ts = wxTemp + "°F";
+    centered(ts.c_str(), 148, WHITE, FB24);
 
     // Description
-    String dc=wxDesc; if(dc.length()>0) dc[0]=toupper(dc[0]);
-    centered(dc.c_str(),150,CYAN,2);
+    String dc = wxDesc; if (dc.length()>0) dc[0]=toupper(dc[0]);
+    centered(dc.c_str(), 178, CYAN, F12);
 
     // Icon
     int16_t ix=SCR_W/2,iy=278;
@@ -558,8 +586,8 @@ void drawMusicPage() {
     gfx->drawPixel(MX+x,fy+35+y,SMILE_COL);
   }
 
-  if(bleConn) centered("Connected",196,GREEN,1);
-  else        centered("Pair: DIMO Remote",196,DIM,1);
+  if(bleConn) centered("Connected", 196, GREEN, F12);
+  else        centered("Pair: DIMO Remote", 196, DIM, F9);
 
   // Audio bars
   int16_t by=304;
@@ -602,13 +630,14 @@ void drawToggle(int16_t x, int16_t y, bool on) {
 }
 
 void drawSettingsRow(int16_t ry, const char* label, const char* sub, bool on, uint16_t iconCol) {
-  gfx->fillRoundRect(12, ry, SCR_W-24, SET_ROW_H-8, 10, 0x18C6); // dark card
-  gfx->fillCircle(44, ry+36, 20, iconCol);                         // icon circle
-  gfx->setTextColor(WHITE); gfx->setTextSize(2);
-  gfx->setCursor(74, ry+20); gfx->print(label);
-  gfx->setTextColor(DIM);    gfx->setTextSize(1);
-  gfx->setCursor(74, ry+52); gfx->print(sub);
-  drawToggle(SCR_W-80, ry+34, on);
+  gfx->fillRoundRect(12, ry, SCR_W-24, SET_ROW_H-4, 10, 0x18C6);
+  gfx->fillCircle(44, ry+42, 20, iconCol);
+  gfx->setFont(FB12); gfx->setTextColor(WHITE);
+  gfx->setCursor(76, ry+36); gfx->print(label);
+  gfx->setFont(F9);  gfx->setTextColor(DIM);
+  gfx->setCursor(76, ry+58); gfx->print(sub);
+  gfx->setFont(FDEF);
+  drawToggle(SCR_W-78, ry+28, on);
 }
 
 // ── WiFi portal functions ─────────────────────────────────────────────────────
@@ -683,47 +712,63 @@ void startPortal() {
 
 void drawPortalScreen() {
   gfx->fillScreen(BLACK);
-  centered("WiFi Setup", 60, CYAN, 2);
-  gfx->drawFastHLine(20, 86, SCR_W-40, DIM);
-  centered("1. On your phone:", 110, WHITE, 1);
-  centered("Connect to WiFi:", 132, DIM, 1);
-  centered("DIMO-Setup", 154, CYAN, 2);
-  centered("Password: dimo1234", 186, DIM, 1);
-  centered("2. Open browser:", 220, WHITE, 1);
-  centered("192.168.4.1", 242, CYAN, 2);
-  centered("3. Enter your WiFi", 276, WHITE, 1);
-  centered("credentials & tap", 294, DIM, 1);
-  centered("Connect DIMO", 312, DIM, 1);
-  // Cancel hint
-  gfx->fillRoundRect(60, 370, SCR_W-120, 44, 10, 0x2104);
-  centered("Tap here to cancel", 386, GRAY, 1);
+  centered("WiFi Setup", 46, CYAN, FB18);
+  gfx->drawFastHLine(20, 58, SCR_W-40, 0x2104);
+
+  // Step 1
+  gfx->fillCircle(28, 92, 16, 0x0289);
+  centered("1", 98, WHITE, FB12); // approximate
+  gfx->setFont(F12); gfx->setTextColor(WHITE);
+  gfx->setCursor(52, 98); gfx->print("On your phone, connect");
+  gfx->setCursor(52,118); gfx->print("to this WiFi:");
+  gfx->setFont(FDEF);
+  centered("DIMO-Setup", 148, CYAN, FB18);
+  centered("Password:  dimo1234", 174, DIM, F9);
+
+  // Step 2
+  gfx->fillCircle(28, 206, 16, 0x0289);
+  gfx->setFont(F12); gfx->setTextColor(WHITE);
+  gfx->setCursor(52, 212); gfx->print("Open browser, go to:");
+  gfx->setFont(FDEF);
+  centered("192.168.4.1", 248, CYAN, FB18);
+
+  // Step 3
+  gfx->setFont(F12); gfx->setTextColor(WHITE);
+  gfx->setCursor(20, 290); gfx->print("Select network & enter");
+  gfx->setCursor(20, 312); gfx->print("password, tap Connect.");
+  gfx->setFont(FDEF);
+
+  // Cancel button
+  gfx->fillRoundRect(40, 356, SCR_W-80, 52, 12, 0x2104);
+  centered("Tap to cancel", 389, GRAY, F12);
 }
 
 void drawSettingsPage() {
   gfx->fillScreen(BLACK);
   drawStatusBar();
-  centered("SETTINGS", 50, WHITE, 2);
-  gfx->drawFastHLine(20, 72, SCR_W-40, DIM);
+  centered("Settings", 56, WHITE, FB18);
+  gfx->drawFastHLine(20, 68, SCR_W-40, 0x2104);
 
   String wfSub = wifiOk ? String("Connected: ")+wifiSSID
                         : (wifiConnecting ? "Connecting..." : "Off");
   drawSettingsRow(SET_ROW_Y1, "WiFi", wfSub.c_str(), wifiOk||wifiConnecting, 0x02DF);
 
-  const char* btSub = bleConn ? "Device connected" : (bleEnabled ? "Visible as DIMO" : "Off");
+  const char* btSub = bleConn ? "Device connected" : (bleEnabled ? "Visible: DIMO" : "Off");
   drawSettingsRow(SET_ROW_Y2, "Bluetooth", btSub, bleEnabled, 0x001F);
 
-  // WiFi setup row (no toggle, just a button-style row)
+  // Change network row
   gfx->fillRoundRect(12, SET_ROW_Y3, SCR_W-24, SET_ROW_H-4, 10, 0x18C6);
   gfx->fillCircle(44, SET_ROW_Y3+42, 20, 0x0289);
-  gfx->setTextColor(WHITE); gfx->setTextSize(1);
-  gfx->setCursor(44-6, SET_ROW_Y3+36); gfx->print("AP");
-  gfx->setTextColor(WHITE); gfx->setTextSize(2);
-  gfx->setCursor(74, SET_ROW_Y3+22); gfx->print("Change Network");
-  gfx->setTextColor(DIM); gfx->setTextSize(1);
-  gfx->setCursor(74, SET_ROW_Y3+52); gfx->print(strlen(wifiSSID)>0 ? wifiSSID : "No saved network");
+  gfx->setFont(F9); gfx->setTextColor(WHITE);
+  gfx->setCursor(36, SET_ROW_Y3+46); gfx->print("AP");
+  gfx->setFont(FB12); gfx->setTextColor(WHITE);
+  gfx->setCursor(76, SET_ROW_Y3+36); gfx->print("Change Network");
+  gfx->setFont(F9); gfx->setTextColor(DIM);
+  gfx->setCursor(76, SET_ROW_Y3+58);
+  gfx->print(strlen(wifiSSID)>0 ? wifiSSID : "No saved network");
+  gfx->setFont(FDEF);
 
-  gfx->setTextColor(DIM); gfx->setTextSize(1);
-  gfx->setCursor(6, SCR_H-14); gfx->print("swipe up for home");
+  centered("swipe up for home", SCR_H-10, DIM);
 }
 
 void handleSettingsTap(int16_t y) {
@@ -755,9 +800,13 @@ static const int16_t ICO_X[] = {68, 184, 300};
 void drawIconBase(int16_t cx, int16_t cy, uint16_t bg, const char* label) {
   gfx->fillCircle(cx, cy, ICO_R+5, 0x0841);
   gfx->fillCircle(cx, cy, ICO_R,   bg);
-  gfx->setTextColor(WHITE); gfx->setTextSize(1);
-  gfx->setCursor(cx - (int16_t)(strlen(label)*3), cy+ICO_R+10);
+  gfx->setFont(F9); gfx->setTextColor(WHITE); gfx->setTextSize(1);
+  int16_t x1,y1; uint16_t w,h;
+  int16_t labelY = cy+ICO_R+18;
+  gfx->getTextBounds(label, cx, labelY, &x1, &y1, &w, &h);
+  gfx->setCursor(cx - (int16_t)w/2, labelY);
   gfx->print(label);
+  gfx->setFont(FDEF);
 }
 
 void drawGearIcon(int16_t cx, int16_t cy) {
@@ -799,10 +848,11 @@ void drawHomePage() {
   gfx->fillScreen(BLACK);
 
   // Header
-  gfx->setTextColor(WHITE); gfx->setTextSize(3);
-  gfx->setCursor(20, 38); gfx->print("DIMO");
-  gfx->setTextColor(DIM);  gfx->setTextSize(1);
-  gfx->setCursor(110, 50); gfx->print("apps");
+  gfx->setFont(FB24); gfx->setTextColor(WHITE); gfx->setTextSize(1);
+  gfx->setCursor(20, 58); gfx->print("DIMO");
+  gfx->setFont(F9); gfx->setTextColor(DIM);
+  gfx->setCursor(122, 58); gfx->print("apps");
+  gfx->setFont(FDEF);
   gfx->drawFastHLine(0, 72, SCR_W, 0x2104);
 
   // Row 1
@@ -815,19 +865,23 @@ void drawHomePage() {
 
   // Placeholder spots
   gfx->fillCircle(ICO_X[1], ICO_Y2, ICO_R, 0x1082);
-  gfx->setTextColor(DIM); gfx->setTextSize(2);
-  gfx->setCursor(ICO_X[1]-6, ICO_Y2-8); gfx->print("+");
-  gfx->setTextColor(DIM); gfx->setTextSize(1);
-  gfx->setCursor(ICO_X[1]-12, ICO_Y2+ICO_R+10); gfx->print("soon");
+  gfx->setFont(FB12); gfx->setTextColor(DIM);
+  gfx->setCursor(ICO_X[1]-8, ICO_Y2+7); gfx->print("+");
+  gfx->setFont(F9); gfx->setTextColor(DIM);
+  int16_t sx1,sy1; uint16_t sw,sh;
+  gfx->getTextBounds("soon", ICO_X[1], ICO_Y2+ICO_R+18, &sx1,&sy1,&sw,&sh);
+  gfx->setCursor(ICO_X[1]-(int16_t)sw/2, ICO_Y2+ICO_R+18); gfx->print("soon");
 
   gfx->fillCircle(ICO_X[2], ICO_Y2, ICO_R, 0x1082);
-  gfx->setCursor(ICO_X[2]-6, ICO_Y2-8); gfx->print("+");
-  gfx->setTextSize(1);
-  gfx->setCursor(ICO_X[2]-12, ICO_Y2+ICO_R+10); gfx->print("soon");
+  gfx->setFont(FB12); gfx->setTextColor(DIM);
+  gfx->setCursor(ICO_X[2]-8, ICO_Y2+7); gfx->print("+");
+  gfx->setFont(F9); gfx->setTextColor(DIM);
+  gfx->getTextBounds("soon", ICO_X[2], ICO_Y2+ICO_R+18, &sx1,&sy1,&sw,&sh);
+  gfx->setCursor(ICO_X[2]-(int16_t)sw/2, ICO_Y2+ICO_R+18); gfx->print("soon");
+  gfx->setFont(FDEF);
 
   // Nav hint
-  gfx->setTextColor(DIM); gfx->setTextSize(1);
-  centered("swipe up to return", SCR_H-14, DIM, 1);
+  centered("swipe up to return", SCR_H-10, DIM);
 }
 
 void handleHomeTap(int16_t tx, int16_t ty) {
