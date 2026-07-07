@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.19.0-alpha.2 - 2026-07-07
+
+- Removes the rough idle scene carousel from alpha.1.
+- Fixes face flicker by stopping full-screen redraws during idle animation.
+- Switches the default face to a cleaner white-on-black character with subtle eye, brow, mouth, and blink changes.
+
 ## 0.19.0-alpha.1 - 2026-07-07
 
 - Starts the Taby-inspired visual rebuild on `v0.19-next`.

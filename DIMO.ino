@@ -44,8 +44,8 @@
 HWCDC USBSerial;
 
 // ── Version ──────────────────────────────────────────────────────────────────
-#define DIMO_VERSION "0.19.0-alpha.1"
-#define DIMO_VERSION_NAME "Digital sketch animation"
+#define DIMO_VERSION "0.19.0-alpha.2"
+#define DIMO_VERSION_NAME "Stable digital face"
 
 // ── Hardware ──────────────────────────────────────────────────────────────────
 #define SDA_PIN  8
@@ -152,6 +152,7 @@ FaceScene faceScene = SCENE_IDLE;
 uint32_t  faceSceneStart = 0;
 uint32_t  faceFrameTimer = 0;
 uint8_t   faceFrame = 0;
+uint8_t   idleMood = 0;
 
 // ── BLE ───────────────────────────────────────────────────────────────────────
 bool              bleConn    = false;
@@ -203,7 +204,6 @@ void drawSparkle(int16_t x, int16_t y, uint8_t s, uint16_t col) {
 
 void drawCapsuleEye(int16_t x, int16_t y, int16_t w, int16_t h, int8_t lift = 0) {
   gfx->fillRoundRect(x - w/2, y - h/2 + lift, w, h, h/2, PAPER);
-  gfx->fillCircle(x + w/5, y - h/7 + lift, h/5, BLACK);
 }
 
 void drawTinySmile(int16_t cx, int16_t cy, uint8_t width, uint16_t col = PAPER) {
@@ -352,37 +352,34 @@ void drawFlowerEye(int16_t cx, int16_t cy) {
 }
 
 void drawFaceScene() {
-  gfx->fillScreen(BLACK);
-  uint8_t ph = faceFrame % 24;
-  int8_t wobble = (ph < 12) ? ph - 6 : 18 - ph;
+  gfx->fillRect(48, 86, 272, 238, BLACK);
 
-  switch (faceScene) {
-    case SCENE_IDLE:
-      drawDigitalFaceBase(0);
-      drawCheeks();
-      break;
-    case SCENE_DRAWING:
-      drawCapsuleEye(126, 188 + wobble / 5, 40, 30);
-      drawCapsuleEye(242, 188 - wobble / 6, 40, 30);
-      thickArc(184, 250, 28, 13, 28, 152, 3, PAPER);
-      drawPencil(202, 104 + wobble / 2, -26);
-      drawPaperSheet(72, 312, 132, 54, 28);
-      break;
-    case SCENE_MAKER:
-      drawCapsuleEye(130, 178, 32, 70);
-      drawCapsuleEye(238, 178, 32, 70);
-      drawTinySmile(184, 238, 24);
-      drawMakerProp(314 + wobble / 2);
-      break;
-    case SCENE_FLOWER:
-      drawFlowerEye(112, 190);
-      drawFlowerEye(256, 190);
-      drawTinySmile(184, 270, 36);
-      break;
-    case SCENE_LIST:
-      drawChecklistIcon(SCR_W / 2, 224 + wobble / 4);
-      break;
+  if (idleMood == 2) {
+    thickArc(120 + gazeDir / 2, 190, 30, 18, 20, 160, 5, PAPER);
+    thickArc(248 + gazeDir / 2, 190, 30, 18, 20, 160, 5, PAPER);
+    thickLine(96, 132, 134, 124, 5, PAPER);
+    thickLine(234, 124, 272, 132, 5, PAPER);
+    gfx->drawCircle(184, 258, 12, PAPER);
+    gfx->drawCircle(184, 258, 13, PAPER);
+  } else {
+    int16_t ly = idleMood == 1 ? 184 : 190;
+    int16_t ry = idleMood == 1 ? 196 : 190;
+    drawCapsuleEye(120 + gazeDir, ly, 50, idleMood == 1 ? 28 : 36);
+    drawCapsuleEye(248 + gazeDir, ry, 50, idleMood == 1 ? 36 : 36);
+
+    if (idleMood == 1) {
+      thickLine(94, 132, 132, 124, 5, PAPER);
+      thickArc(248, 134, 24, 12, 205, 335, 5, PAPER);
+      drawTinySmile(184, 260, 20);
+    } else {
+      thickArc(120, 132, 24, 12, 205, 335, 5, PAPER);
+      thickArc(248, 132, 24, 12, 205, 335, 5, PAPER);
+      drawTinySmile(184, 260, 34);
+    }
   }
+
+  drawSparkle(78, 126, 5, INK_DIM);
+  drawSparkle(292, 126, 4, INK_DIM);
 }
 
 void drawFacePage() {
@@ -390,6 +387,9 @@ void drawFacePage() {
   faceSceneStart = millis();
   faceFrameTimer = 0;
   faceFrame = 0;
+  idleMood = 0;
+  gazeDir = 0;
+  gfx->fillScreen(BLACK);
   drawFaceScene();
 }
 
@@ -1166,17 +1166,51 @@ void loop(){
 
   handleTouch();
 
-  // ── FACE: reference-style animated sketch scenes ──────────────────────────
+  // ── FACE: stable partial redraw only, no full-screen animation clears ─────
   if(page==PAGE_FACE){
-    if(now - faceSceneStart > 5200){
+
+    if (blinkState == BLINK_OPEN && now - gazeTimer > nextGaze) {
+      gazeTimer = now;
+      nextGaze = random(1600, 3400);
+      static const int8_t dirs[] = {-8, 0, 8, 0};
+      static uint8_t gazeIdx = 0;
+      gazeIdx = (gazeIdx + 1) % 4;
+      updateGaze(dirs[gazeIdx]);
+    }
+
+    if (now - faceSceneStart > 6500) {
       faceSceneStart = now;
-      faceScene = (FaceScene)((faceScene + 1) % 5);
-      faceFrame = 0;
+      idleMood = (idleMood + 1) % 3;
       drawFaceScene();
-    } else if(now - faceFrameTimer > 120){
-      faceFrameTimer = now;
-      faceFrame++;
-      drawFaceScene();
+    }
+
+    switch(blinkState){
+      case BLINK_OPEN:
+        if(now-blinkTimer>nextBlink){
+          blinkState=BLINK_CLOSING;
+          blinkTimer=now;
+        }
+        break;
+      case BLINK_CLOSING:
+        blinkOverlay(EL_X,EY_Y,1); blinkOverlay(ER_X,EY_Y,1);
+        blinkState=BLINK_CLOSED;
+        blinkTimer=now;
+        break;
+      case BLINK_CLOSED:
+        if(now-blinkTimer>70){
+          blinkOverlay(EL_X,EY_Y,2); blinkOverlay(ER_X,EY_Y,2);
+          blinkState=BLINK_OPENING;
+          blinkTimer=now;
+        }
+        break;
+      case BLINK_OPENING:
+        if(now-blinkTimer>70){
+          drawFaceScene();
+          blinkState=BLINK_OPEN;
+          blinkTimer=now;
+          nextBlink=random(2800,6200);
+        }
+        break;
     }
   }
 
