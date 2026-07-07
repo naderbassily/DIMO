@@ -44,8 +44,8 @@
 HWCDC USBSerial;
 
 // ── Version ──────────────────────────────────────────────────────────────────
-#define DIMO_VERSION "0.18.0"
-#define DIMO_VERSION_NAME "Touch AMOLED baseline"
+#define DIMO_VERSION "0.19.0-alpha.1"
+#define DIMO_VERSION_NAME "Digital sketch animation"
 
 // ── Hardware ──────────────────────────────────────────────────────────────────
 #define SDA_PIN  8
@@ -81,6 +81,11 @@ bool         portalActive = false;
 // ── Colors ────────────────────────────────────────────────────────────────────
 #define BLACK     0x0000
 #define WHITE     0xFFFF
+#define PAPER     0xEFFF   // warm white for the Taby-like sketch style
+#define INK_DIM   0x8C71
+#define BLUE_DIM  0x0256
+#define ACCENT    0xF900
+#define PURPLE    0xA37F
 #define IRIS_COL  0x1904   // deep dark blue iris
 #define PUPIL_COL 0x0000
 #define SHINE_COL 0xFFFF
@@ -141,6 +146,13 @@ int16_t  tdSX=0, tdSY=0, tdLX=0, tdLY=0;
 uint32_t tdMs     = 0;
 bool     tdSwiped = false;
 
+// ── Digital sketch idle animation ────────────────────────────────────────────
+enum FaceScene { SCENE_IDLE, SCENE_DRAWING, SCENE_MAKER, SCENE_FLOWER, SCENE_LIST };
+FaceScene faceScene = SCENE_IDLE;
+uint32_t  faceSceneStart = 0;
+uint32_t  faceFrameTimer = 0;
+uint8_t   faceFrame = 0;
+
 // ── BLE ───────────────────────────────────────────────────────────────────────
 bool              bleConn    = false;
 bool              bleEnabled = true;
@@ -160,6 +172,69 @@ void centered(const char *s, int16_t y, uint16_t col,
   gfx->setCursor((SCR_W - (int16_t)w) / 2, y);
   gfx->print(s);
   gfx->setFont(FDEF); // always reset
+}
+
+void thickLine(int16_t x1, int16_t y1, int16_t x2, int16_t y2, uint8_t w, uint16_t col) {
+  for (int8_t o = -(int8_t)w/2; o <= (int8_t)w/2; o++) {
+    gfx->drawLine(x1 + o, y1, x2 + o, y2, col);
+    gfx->drawLine(x1, y1 + o, x2, y2 + o, col);
+  }
+}
+
+void thickArc(int16_t cx, int16_t cy, int16_t rx, int16_t ry,
+              int16_t startDeg, int16_t endDeg, uint8_t w, uint16_t col) {
+  int16_t px = cx + (int16_t)(cosf(startDeg * PI / 180.0f) * rx);
+  int16_t py = cy + (int16_t)(sinf(startDeg * PI / 180.0f) * ry);
+  for (int16_t a = startDeg + 4; a <= endDeg; a += 4) {
+    float r = a * PI / 180.0f;
+    int16_t x = cx + (int16_t)(cosf(r) * rx);
+    int16_t y = cy + (int16_t)(sinf(r) * ry);
+    thickLine(px, py, x, y, w, col);
+    px = x; py = y;
+  }
+}
+
+void drawSparkle(int16_t x, int16_t y, uint8_t s, uint16_t col) {
+  thickLine(x-s, y, x+s, y, 1, col);
+  thickLine(x, y-s, x, y+s, 1, col);
+  gfx->drawPixel(x-s-2, y-s-2, col);
+  gfx->drawPixel(x+s+2, y+s+2, col);
+}
+
+void drawCapsuleEye(int16_t x, int16_t y, int16_t w, int16_t h, int8_t lift = 0) {
+  gfx->fillRoundRect(x - w/2, y - h/2 + lift, w, h, h/2, PAPER);
+  gfx->fillCircle(x + w/5, y - h/7 + lift, h/5, BLACK);
+}
+
+void drawTinySmile(int16_t cx, int16_t cy, uint8_t width, uint16_t col = PAPER) {
+  thickArc(cx, cy - 8, width, 18, 28, 152, 3, col);
+}
+
+void drawDigitalFaceBase(int8_t mood = 0) {
+  int16_t bob = (faceFrame % 16 < 8) ? -2 : 0;
+  int16_t eyeY = 190 + bob;
+
+  if (mood == 2) {
+    gfx->fillCircle(118, eyeY, 22, PAPER);
+    gfx->fillCircle(118, eyeY, 8, BLACK);
+    gfx->fillCircle(250, eyeY, 22, PAPER);
+    gfx->fillCircle(250, eyeY, 8, BLACK);
+    thickArc(118, eyeY + 2, 34, 26, 205, 335, 8, BLACK);
+    thickArc(250, eyeY + 2, 34, 26, 205, 335, 8, BLACK);
+  } else {
+    drawCapsuleEye(120, eyeY, 44, mood == 1 ? 26 : 34, mood == 1 ? 8 : 0);
+    drawCapsuleEye(248, eyeY, 44, mood == 1 ? 26 : 34, mood == 1 ? 8 : 0);
+  }
+
+  if (mood == 1) {
+    thickLine(92, eyeY - 52, 128, eyeY - 62, 5, PAPER);
+    thickLine(240, eyeY - 62, 276, eyeY - 52, 5, PAPER);
+    thickLine(170, 268, 198, 268, 4, PAPER);
+  } else {
+    thickArc(118, eyeY - 58, 24, 13, 205, 335, 5, PAPER);
+    thickArc(250, eyeY - 58, 24, 13, 205, 335, 5, PAPER);
+    drawTinySmile(184, 260, mood == 2 ? 44 : 32);
+  }
 }
 float  jsonF(const String &b, const char *k) {
   String key=String("\"")+k+"\":"; int i=b.indexOf(key);
@@ -195,102 +270,132 @@ bool touchRead(int16_t &x, int16_t &y) {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-//  DRAW EYE — called ONCE when face is shown, not in loop
-//  Round white eye, dark iris, pupil, two shine dots — exactly like reference
+//  Digital sketch face + idle scenes
 // ─────────────────────────────────────────────────────────────────────────────
 void drawEyeFull(int16_t cx, int16_t cy, int8_t gaze = 0) {
-  int16_t R = EYE_R; // 44
-  gfx->fillCircle(cx, cy, R, WHITE);                    // white sclera
-  gfx->fillCircle(cx+gaze, cy, R-12, IRIS_COL);        // iris follows gaze
-  gfx->fillCircle(cx+gaze, cy, R-25, BLACK);            // smaller pupil
-  gfx->fillCircle(cx+gaze+11, cy-12, 8, WHITE);         // shine follows gaze
-  gfx->fillCircle(cx+gaze-7,  cy+10, 4, 0xCF1B);       // secondary shine
+  drawCapsuleEye(cx + gaze, cy, 44, 34);
 }
 
-// ─────────────────────────────────────────────────────────────────────────────
-//  BLINK OVERLAY — no redraw, just black rect over eye then restore
-//  3 steps: half-close → full-close → open (restore eye underneath)
-// ─────────────────────────────────────────────────────────────────────────────
 void blinkOverlay(int16_t cx, int16_t cy, int step) {
-  // step 1: cover top half
-  // step 2: cover full eye (closed line)
-  // step 3: restore (redraw eye)
-  int16_t R = EYE_R;
   if (step == 1) {
-    // Eyelid comes DOWN from top — covers top 60%
-    gfx->fillRect(cx-R-1, cy-R-2, (R+1)*2, (int16_t)(R*1.2f), BLACK);
-    // Eyelid bottom edge
-    gfx->fillRoundRect(cx-R+2, cy-R-2+(int16_t)(R*1.2f)-4, (R-2)*2, 5, 2, LASH_COL);
+    gfx->fillRoundRect(cx - 24, cy - 18, 48, 28, 10, BLACK);
+    gfx->fillRoundRect(cx - 21, cy - 2, 42, 5, 2, PAPER);
   } else if (step == 2) {
-    // Fully closed — whole eye black + thin line
-    gfx->fillCircle(cx, cy, R+1, BLACK);
-    gfx->fillRoundRect(cx-R+6, cy-3, (R-6)*2, 7, 3, LASH_COL);
+    gfx->fillRoundRect(cx - 24, cy - 20, 48, 40, 10, BLACK);
+    gfx->fillRoundRect(cx - 19, cy - 2, 38, 5, 2, PAPER);
   } else {
-    // Open — restore eye with current gaze
     drawEyeFull(cx, cy, gazeDir);
   }
 }
 
-// ─────────────────────────────────────────────────────────────────────────────
-//  CHEEKS — drawn once, never redrawn
-// ─────────────────────────────────────────────────────────────────────────────
 void drawCheeks() {
-  // Explicitly erase cheek zones — no cheeks on DIMO
-  gfx->fillRect(CK_LX-30, CK_Y-30, 60, 60, BLACK);
-  gfx->fillRect(CK_RX-30, CK_Y-30, 60, 60, BLACK);
+  drawSparkle(74, 128, 9, INK_DIM);
+  drawSparkle(292, 128, 7, INK_DIM);
 }
 
-// ─────────────────────────────────────────────────────────────────────────────
-//  MOUTH — thick U smile
-// ─────────────────────────────────────────────────────────────────────────────
 void drawMouth() {
-  const int16_t r=34, depth=16;
-  for (int x=-r; x<=r; x++) {
-    int16_t y = depth - (int16_t)((float)x*x * depth / (r*r));
-    gfx->drawPixel(MX+x, MY+y,   WHITE);
-    gfx->drawPixel(MX+x, MY+y+1, WHITE);
-    gfx->drawPixel(MX+x, MY+y+2, WHITE);
-    gfx->drawPixel(MX+x, MY+y+3, WHITE);
-    gfx->drawPixel(MX+x, MY+y+4, WHITE);
-    gfx->drawPixel(MX+x, MY+y+5, GRAY);
-  }
+  drawTinySmile(MX, 258, 32);
 }
 
-// ─────────────────────────────────────────────────────────────────────────────
-//  EYEBROWS — slight outward tilt, friendly expression
-// ─────────────────────────────────────────────────────────────────────────────
 void drawEyebrows() {
-  int16_t by = EY_Y - EYE_R - 16;
-  for (int x = -28; x <= 28; x++) {
-    // Inner end slightly lower, outer end slightly higher = relaxed/friendly
-    int16_t tiltL =  (int16_t)(x * 5 / 28); // left brow
-    int16_t tiltR = -(int16_t)(x * 5 / 28); // right brow (mirrored)
-    for (int t = 0; t < 5; t++) {
-      gfx->drawPixel(EL_X + x, by + tiltL + t, WHITE);
-      gfx->drawPixel(ER_X + x, by + tiltR + t, WHITE);
-    }
+  thickArc(118, 132, 24, 13, 205, 335, 5, PAPER);
+  thickArc(250, 132, 24, 13, 205, 335, 5, PAPER);
+}
+
+void drawPaperSheet(int16_t x, int16_t y, int16_t w, int16_t h, int16_t tilt) {
+  thickLine(x, y + h, x + w, y + h - tilt, 2, PAPER);
+  thickLine(x, y + h, x + 12, y, 2, PAPER);
+  thickLine(x + 12, y, x + w + 12, y - tilt, 2, PAPER);
+  thickLine(x + w + 12, y - tilt, x + w, y + h - tilt, 2, PAPER);
+  thickLine(x + 22, y + h - 17, x + w - 18, y + h - 26 - tilt, 1, INK_DIM);
+  thickLine(x + 30, y + h - 28, x + w - 8, y + h - 38 - tilt, 1, INK_DIM);
+  thickLine(x + 42, y + h - 39, x + w - 32, y + h - 48 - tilt, 1, INK_DIM);
+}
+
+void drawPencil(int16_t x, int16_t y, int16_t a) {
+  thickLine(x, y, x + 72, y + a, 5, PAPER);
+  thickLine(x + 68, y + a - 12, x + 90, y + a + 3, 2, PAPER);
+  thickLine(x + 68, y + a + 12, x + 90, y + a + 3, 2, PAPER);
+  thickLine(x + 14, y + 2, x + 24, y + a + 10, 1, BLACK);
+  gfx->fillTriangle(x + 86, y + a - 2, x + 98, y + a + 4, x + 86, y + a + 10, PAPER);
+}
+
+void drawChecklistIcon(int16_t cx, int16_t cy) {
+  gfx->drawRoundRect(cx - 48, cy - 62, 96, 124, 8, PAPER);
+  gfx->drawRoundRect(cx - 19, cy - 48, 38, 10, 4, PAPER);
+  for (int i = 0; i < 3; i++) {
+    int16_t yy = cy - 18 + i * 28;
+    gfx->drawRoundRect(cx - 36, yy - 8, 12, 12, 3, PAPER);
+    thickLine(cx - 12, yy - 2, cx + 32, yy - 2, 3, PAPER);
   }
 }
 
-// ─────────────────────────────────────────────────────────────────────────────
-//  FULL FACE — draw everything fresh (only on page entry)
-// ─────────────────────────────────────────────────────────────────────────────
-void drawFacePage() {
+void drawMakerProp(int16_t baseY) {
+  thickLine(32, baseY + 44, 224, baseY - 20, 2, INK_DIM);
+  thickLine(54, baseY + 38, 244, baseY + 4, 2, INK_DIM);
+  thickLine(74, baseY + 28, 136, baseY - 48, 2, INK_DIM);
+  thickLine(142, baseY + 16, 200, baseY - 46, 2, INK_DIM);
+  gfx->drawCircle(104, baseY - 2, 28, INK_DIM);
+  gfx->drawRoundRect(166, baseY - 30, 56, 44, 3, INK_DIM);
+  gfx->drawRoundRect(204, baseY - 54, 14, 56, 7, PAPER);
+  gfx->fillRoundRect(196, baseY - 2, 30, 8, 4, PAPER);
+  thickLine(260, baseY + 20, 272, baseY + 8, 4, ACCENT);
+  thickLine(260, baseY + 8, 272, baseY + 20, 4, ACCENT);
+}
+
+void drawFlowerEye(int16_t cx, int16_t cy) {
+  for (int a = 0; a < 360; a += 72) {
+    float r = a * PI / 180.0f;
+    gfx->fillEllipse(cx + (int16_t)(cosf(r) * 17), cy + (int16_t)(sinf(r) * 17), 15, 19, PAPER);
+  }
+  gfx->fillCircle(cx, cy, 13, PAPER);
+}
+
+void drawFaceScene() {
   gfx->fillScreen(BLACK);
-  drawEyebrows();
-  drawEyeFull(EL_X, EY_Y, gazeDir);
-  drawEyeFull(ER_X, EY_Y, gazeDir);
-  drawCheeks();
-  drawMouth();
+  uint8_t ph = faceFrame % 24;
+  int8_t wobble = (ph < 12) ? ph - 6 : 18 - ph;
+
+  switch (faceScene) {
+    case SCENE_IDLE:
+      drawDigitalFaceBase(0);
+      drawCheeks();
+      break;
+    case SCENE_DRAWING:
+      drawCapsuleEye(126, 188 + wobble / 5, 40, 30);
+      drawCapsuleEye(242, 188 - wobble / 6, 40, 30);
+      thickArc(184, 250, 28, 13, 28, 152, 3, PAPER);
+      drawPencil(202, 104 + wobble / 2, -26);
+      drawPaperSheet(72, 312, 132, 54, 28);
+      break;
+    case SCENE_MAKER:
+      drawCapsuleEye(130, 178, 32, 70);
+      drawCapsuleEye(238, 178, 32, 70);
+      drawTinySmile(184, 238, 24);
+      drawMakerProp(314 + wobble / 2);
+      break;
+    case SCENE_FLOWER:
+      drawFlowerEye(112, 190);
+      drawFlowerEye(256, 190);
+      drawTinySmile(184, 270, 36);
+      break;
+    case SCENE_LIST:
+      drawChecklistIcon(SCR_W / 2, 224 + wobble / 4);
+      break;
+  }
+}
+
+void drawFacePage() {
+  faceScene = SCENE_IDLE;
+  faceSceneStart = millis();
+  faceFrameTimer = 0;
+  faceFrame = 0;
+  drawFaceScene();
 }
 
 void updateGaze(int8_t newDir) {
   gazeDir = newDir;
-  // Erase just the eye circle and redraw — no full screen clear
-  gfx->fillCircle(EL_X, EY_Y, EYE_R+1, BLACK);
-  gfx->fillCircle(ER_X, EY_Y, EYE_R+1, BLACK);
-  drawEyeFull(EL_X, EY_Y, gazeDir);
-  drawEyeFull(ER_X, EY_Y, gazeDir);
+  drawFaceScene();
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -906,7 +1011,7 @@ void handleHomeTap(int16_t tx, int16_t ty) {
 void showPage(Page p) {
   page = p;
   switch(p){
-    case PAGE_FACE:     drawFacePage(); drawStatusBar(); blinkState=BLINK_OPEN; blinkTimer=millis(); nextBlink=5000; break;
+    case PAGE_FACE:     drawFacePage(); blinkState=BLINK_OPEN; blinkTimer=millis(); nextBlink=5000; break;
     case PAGE_HOME:     drawHomePage(); break;
     case PAGE_CLOCK:    drawClockPage(); break;
     case PAGE_WEATHER:  drawWeatherPage(); break;
@@ -1061,48 +1166,18 @@ void loop(){
 
   handleTouch();
 
-  // ── FACE: only blink and sparkle — no other redraws ───────────────────────
+  // ── FACE: reference-style animated sketch scenes ──────────────────────────
   if(page==PAGE_FACE){
-
-    // Gaze animation — look left, center, right
-    if (blinkState == BLINK_OPEN && now - gazeTimer > nextGaze) {
-      gazeTimer = now;
-      nextGaze  = random(3000, 7000);
-      static const int8_t dirs[] = {-12, 0, 12, 0};
-      static uint8_t gazeIdx = 0;
-      gazeIdx = (gazeIdx + 1) % 4;
-      updateGaze(dirs[gazeIdx]);
+    if(now - faceSceneStart > 5200){
+      faceSceneStart = now;
+      faceScene = (FaceScene)((faceScene + 1) % 5);
+      faceFrame = 0;
+      drawFaceScene();
+    } else if(now - faceFrameTimer > 120){
+      faceFrameTimer = now;
+      faceFrame++;
+      drawFaceScene();
     }
-
-    // Blink state machine — overlay only, no eye redraw
-    switch(blinkState){
-      case BLINK_OPEN:
-        if(now-blinkTimer>nextBlink){
-          blinkState=BLINK_CLOSING;
-          blinkTimer=now;
-        }
-        break;
-      case BLINK_CLOSING:
-        blinkOverlay(EL_X,EY_Y,1); blinkOverlay(ER_X,EY_Y,1);
-        blinkState=BLINK_CLOSED;
-        blinkTimer=now;
-        break;
-      case BLINK_CLOSED:
-        blinkOverlay(EL_X,EY_Y,2); blinkOverlay(ER_X,EY_Y,2);
-        blinkState=BLINK_OPENING;
-        blinkTimer=now;
-        break;
-      case BLINK_OPENING:
-        blinkOverlay(EL_X,EY_Y,3); blinkOverlay(ER_X,EY_Y,3);
-        blinkState=BLINK_OPEN;
-        blinkTimer=now;
-        nextBlink=random(3000,7000);
-        break;
-    }
-
-    // Status bar once per second
-    static uint32_t lastStat=0;
-    if(now-lastStat>1000){lastStat=now;drawStatusBar();}
   }
 
   // ── Clock ─────────────────────────────────────────────────────────────────
