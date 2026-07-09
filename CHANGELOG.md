@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.19.0-alpha.3 - 2026-07-09
+
+- Adds a generated compact frame pack from `demo.zip`.
+- Plays the talking animation sequence on the face screen as an ESP demo.
+- Uses run-based drawing and previous-frame erasing to avoid full-screen flicker.
+
 ## 0.19.0-alpha.2 - 2026-07-07
 
 - Removes the rough idle scene carousel from alpha.1.

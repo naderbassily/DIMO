@@ -33,6 +33,7 @@
 #include "FreeSansBold12pt7b.h"
 #include "FreeSansBold18pt7b.h"
 #include "FreeSansBold24pt7b.h"
+#include "DimoTalkFrames.h"
 // Font helpers — always use size 1 with custom fonts, never setTextSize(n>1)
 #define F9   (&FreeSans9pt7b)
 #define F12  (&FreeSans12pt7b)
@@ -44,8 +45,8 @@
 HWCDC USBSerial;
 
 // ── Version ──────────────────────────────────────────────────────────────────
-#define DIMO_VERSION "0.19.0-alpha.2"
-#define DIMO_VERSION_NAME "Stable digital face"
+#define DIMO_VERSION "0.19.0-alpha.3"
+#define DIMO_VERSION_NAME "Talking frame demo"
 
 // ── Hardware ──────────────────────────────────────────────────────────────────
 #define SDA_PIN  8
@@ -153,6 +154,9 @@ uint32_t  faceSceneStart = 0;
 uint32_t  faceFrameTimer = 0;
 uint8_t   faceFrame = 0;
 uint8_t   idleMood = 0;
+uint8_t   talkFrameIndex = 0;
+int16_t   lastTalkFrameDrawn = -1;
+uint32_t  talkFrameTimer = 0;
 
 // ── BLE ───────────────────────────────────────────────────────────────────────
 bool              bleConn    = false;
@@ -382,6 +386,25 @@ void drawFaceScene() {
   drawSparkle(292, 126, 4, INK_DIM);
 }
 
+void drawTalkRuns(uint8_t frame, uint16_t colorOverride = 0xFFFF, bool overrideColor = false) {
+  const TalkRun *runs = (const TalkRun *)pgm_read_ptr(&talkFrames[frame]);
+  uint16_t count = pgm_read_word(&talkFrameRunCounts[frame]);
+  for (uint16_t i = 0; i < count; i++) {
+    TalkRun r;
+    memcpy_P(&r, &runs[i], sizeof(TalkRun));
+    uint16_t col = overrideColor ? colorOverride : TALK_COLORS[r.color];
+    gfx->drawFastHLine(r.x, r.y, r.len, col);
+  }
+}
+
+void drawTalkFrame(uint8_t frame) {
+  if (lastTalkFrameDrawn >= 0) {
+    drawTalkRuns((uint8_t)lastTalkFrameDrawn, BLACK, true);
+  }
+  drawTalkRuns(frame);
+  lastTalkFrameDrawn = frame;
+}
+
 void drawFacePage() {
   faceScene = SCENE_IDLE;
   faceSceneStart = millis();
@@ -389,8 +412,11 @@ void drawFacePage() {
   faceFrame = 0;
   idleMood = 0;
   gazeDir = 0;
+  talkFrameIndex = 0;
+  lastTalkFrameDrawn = -1;
+  talkFrameTimer = millis();
   gfx->fillScreen(BLACK);
-  drawFaceScene();
+  drawTalkFrame(talkFrameIndex);
 }
 
 void updateGaze(int8_t newDir) {
@@ -1166,51 +1192,12 @@ void loop(){
 
   handleTouch();
 
-  // ── FACE: stable partial redraw only, no full-screen animation clears ─────
+  // ── FACE: talking frame demo from demo.zip ────────────────────────────────
   if(page==PAGE_FACE){
-
-    if (blinkState == BLINK_OPEN && now - gazeTimer > nextGaze) {
-      gazeTimer = now;
-      nextGaze = random(1600, 3400);
-      static const int8_t dirs[] = {-8, 0, 8, 0};
-      static uint8_t gazeIdx = 0;
-      gazeIdx = (gazeIdx + 1) % 4;
-      updateGaze(dirs[gazeIdx]);
-    }
-
-    if (now - faceSceneStart > 6500) {
-      faceSceneStart = now;
-      idleMood = (idleMood + 1) % 3;
-      drawFaceScene();
-    }
-
-    switch(blinkState){
-      case BLINK_OPEN:
-        if(now-blinkTimer>nextBlink){
-          blinkState=BLINK_CLOSING;
-          blinkTimer=now;
-        }
-        break;
-      case BLINK_CLOSING:
-        blinkOverlay(EL_X,EY_Y,1); blinkOverlay(ER_X,EY_Y,1);
-        blinkState=BLINK_CLOSED;
-        blinkTimer=now;
-        break;
-      case BLINK_CLOSED:
-        if(now-blinkTimer>70){
-          blinkOverlay(EL_X,EY_Y,2); blinkOverlay(ER_X,EY_Y,2);
-          blinkState=BLINK_OPENING;
-          blinkTimer=now;
-        }
-        break;
-      case BLINK_OPENING:
-        if(now-blinkTimer>70){
-          drawFaceScene();
-          blinkState=BLINK_OPEN;
-          blinkTimer=now;
-          nextBlink=random(2800,6200);
-        }
-        break;
+    if (now - talkFrameTimer >= TALK_FRAME_MS) {
+      talkFrameTimer = now;
+      talkFrameIndex = (talkFrameIndex + 1) % TALK_FRAME_COUNT;
+      drawTalkFrame(talkFrameIndex);
     }
   }
 
