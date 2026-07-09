@@ -21,6 +21,7 @@
 #include <BLEServer.h>
 #include <BLEUtils.h>
 #include <BLEHIDDevice.h>
+#include <esp_heap_caps.h>
 #include <Adafruit_XCA9554.h>
 #include "Arduino_GFX_Library.h"
 #include "HWCDC.h"
@@ -45,8 +46,8 @@
 HWCDC USBSerial;
 
 // ── Version ──────────────────────────────────────────────────────────────────
-#define DIMO_VERSION "0.19.0-alpha.4"
-#define DIMO_VERSION_NAME "Smoother talking demo"
+#define DIMO_VERSION "0.19.0-alpha.5"
+#define DIMO_VERSION_NAME "Buffered talking demo"
 
 // ── Hardware ──────────────────────────────────────────────────────────────────
 #define SDA_PIN  8
@@ -157,6 +158,7 @@ uint8_t   idleMood = 0;
 uint8_t   talkFrameIndex = 0;
 int16_t   lastTalkFrameDrawn = -1;
 uint32_t  talkFrameTimer = 0;
+uint16_t *talkFrameBuffer = nullptr;
 
 // ── BLE ───────────────────────────────────────────────────────────────────────
 bool              bleConn    = false;
@@ -386,24 +388,38 @@ void drawFaceScene() {
   drawSparkle(292, 126, 4, INK_DIM);
 }
 
-void drawTalkRuns(const TalkRun* const *table, const uint16_t *counts,
-                  uint8_t frame, uint16_t colorOverride = 0xFFFF,
-                  bool overrideColor = false) {
-  const TalkRun *runs = (const TalkRun *)pgm_read_ptr(&table[frame]);
-  uint16_t count = pgm_read_word(&counts[frame]);
+void drawTalkRunsDirect(uint8_t frame) {
+  const TalkRun *runs = (const TalkRun *)pgm_read_ptr(&talkFrames[frame]);
+  uint16_t count = pgm_read_word(&talkFrameRunCounts[frame]);
   for (uint16_t i = 0; i < count; i++) {
     TalkRun r;
     memcpy_P(&r, &runs[i], sizeof(TalkRun));
-    uint16_t col = overrideColor ? colorOverride : TALK_COLORS[r.color];
-    gfx->drawFastHLine(r.x, r.y, r.len, col);
+    gfx->drawFastHLine(r.x, TALK_FRAME_Y + r.y, r.len, TALK_COLORS[r.color]);
   }
 }
 
 void drawTalkFrame(uint8_t frame) {
-  if (lastTalkFrameDrawn >= 0) {
-    drawTalkRuns(talkEraseFrames, talkEraseRunCounts, frame, BLACK, true);
+  if (!talkFrameBuffer) {
+    gfx->fillRect(0, TALK_FRAME_Y, TALK_FRAME_W, TALK_FRAME_H, BLACK);
+    drawTalkRunsDirect(frame);
+    lastTalkFrameDrawn = frame;
+    return;
   }
-  drawTalkRuns(talkFrames, talkFrameRunCounts, frame);
+
+  const uint32_t pxCount = (uint32_t)TALK_FRAME_W * TALK_FRAME_H;
+  for (uint32_t i = 0; i < pxCount; i++) talkFrameBuffer[i] = BLACK;
+
+  const TalkRun *runs = (const TalkRun *)pgm_read_ptr(&talkFrames[frame]);
+  uint16_t count = pgm_read_word(&talkFrameRunCounts[frame]);
+  for (uint16_t i = 0; i < count; i++) {
+    TalkRun r;
+    memcpy_P(&r, &runs[i], sizeof(TalkRun));
+    uint16_t col = TALK_COLORS[r.color];
+    uint32_t base = (uint32_t)r.y * TALK_FRAME_W + r.x;
+    for (uint16_t x = 0; x < r.len; x++) talkFrameBuffer[base + x] = col;
+  }
+
+  gfx->draw16bitRGBBitmap(0, TALK_FRAME_Y, talkFrameBuffer, TALK_FRAME_W, TALK_FRAME_H);
   lastTalkFrameDrawn = frame;
 }
 
@@ -1154,6 +1170,12 @@ void setup(){
   gfx->begin();
   gfx->setBrightness(230);
   gfx->fillScreen(BLACK);
+
+  talkFrameBuffer = (uint16_t *)heap_caps_malloc(
+    (size_t)TALK_FRAME_W * TALK_FRAME_H * sizeof(uint16_t),
+    MALLOC_CAP_8BIT
+  );
+  if (!talkFrameBuffer) USBSerial.println("DIMO talk buffer allocation failed; using direct draw");
 
   bootAnimation();
 

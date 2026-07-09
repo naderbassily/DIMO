@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.19.0-alpha.5 - 2026-07-09
+
+- Switches talking playback to an offscreen RGB565 frame buffer.
+- Pushes each complete animation frame as one bitmap for cleaner motion.
+- Keeps direct drawing as a fallback if the frame buffer cannot be allocated.
+
 ## 0.19.0-alpha.4 - 2026-07-09
 
 - Slows the talking demo playback for a more natural loop.
