@@ -45,8 +45,8 @@
 HWCDC USBSerial;
 
 // ── Version ──────────────────────────────────────────────────────────────────
-#define DIMO_VERSION "0.19.0-alpha.3"
-#define DIMO_VERSION_NAME "Talking frame demo"
+#define DIMO_VERSION "0.19.0-alpha.4"
+#define DIMO_VERSION_NAME "Smoother talking demo"
 
 // ── Hardware ──────────────────────────────────────────────────────────────────
 #define SDA_PIN  8
@@ -386,9 +386,11 @@ void drawFaceScene() {
   drawSparkle(292, 126, 4, INK_DIM);
 }
 
-void drawTalkRuns(uint8_t frame, uint16_t colorOverride = 0xFFFF, bool overrideColor = false) {
-  const TalkRun *runs = (const TalkRun *)pgm_read_ptr(&talkFrames[frame]);
-  uint16_t count = pgm_read_word(&talkFrameRunCounts[frame]);
+void drawTalkRuns(const TalkRun* const *table, const uint16_t *counts,
+                  uint8_t frame, uint16_t colorOverride = 0xFFFF,
+                  bool overrideColor = false) {
+  const TalkRun *runs = (const TalkRun *)pgm_read_ptr(&table[frame]);
+  uint16_t count = pgm_read_word(&counts[frame]);
   for (uint16_t i = 0; i < count; i++) {
     TalkRun r;
     memcpy_P(&r, &runs[i], sizeof(TalkRun));
@@ -399,9 +401,9 @@ void drawTalkRuns(uint8_t frame, uint16_t colorOverride = 0xFFFF, bool overrideC
 
 void drawTalkFrame(uint8_t frame) {
   if (lastTalkFrameDrawn >= 0) {
-    drawTalkRuns((uint8_t)lastTalkFrameDrawn, BLACK, true);
+    drawTalkRuns(talkEraseFrames, talkEraseRunCounts, frame, BLACK, true);
   }
-  drawTalkRuns(frame);
+  drawTalkRuns(talkFrames, talkFrameRunCounts, frame);
   lastTalkFrameDrawn = frame;
 }
 

@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.19.0-alpha.4 - 2026-07-09
+
+- Slows the talking demo playback for a more natural loop.
+- Reduces flicker by generating erase deltas instead of clearing each whole previous frame.
+
 ## 0.19.0-alpha.3 - 2026-07-09
 
 - Adds a generated compact frame pack from `demo.zip`.
